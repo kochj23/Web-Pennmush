@@ -63,6 +63,11 @@ function setupWebSocketHandlers() {
 
         // Refresh players list
         refreshPlayersList();
+
+        // Load room map
+        if (typeof roomMapVisualizer !== 'undefined') {
+            roomMapVisualizer.loadMap(0, 5);
+        }
     });
 
     // Handle output from server

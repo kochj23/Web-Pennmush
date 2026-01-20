@@ -43,6 +43,42 @@ A modern, web-based MUSH (Multi-User Shared Hallucination) server inspired by th
 - **Permission System**: God, Wizard, Royal, and user-level permissions
 - **Input Validation**: Prevents command injection and XSS
 
+### NEW: Channel System 📢
+- **Group Communication**: Create and join channels for organized chat
+- **Default Channels**: Public, Newbie, and Builder channels pre-configured
+- **Channel Aliases**: Quick shortcuts (e.g., `pub Hello!` to chat on Public)
+- **Channel Management**: Create, join, leave, and list channels
+- **Member Tracking**: See who's on each channel with `channel/who`
+
+### NEW: Comprehensive Help System 📚
+- **In-Game Documentation**: Searchable help topics covering all commands
+- **Category Organization**: Commands, building, softcode, NPCs, and more
+- **Context-Sensitive**: Related topics suggested for each help entry
+- **Alias Support**: Find help by command aliases
+- **Examples Included**: Every help topic includes usage examples
+
+### NEW: Visual Room Map 🗺️
+- **Interactive Graph**: See connected rooms as an interactive network
+- **Real-time Updates**: Map refreshes as you explore
+- **Clickable Nodes**: Click rooms on the map to view them
+- **Spatial Awareness**: Understand the layout of the game world
+- **Customizable Radius**: Adjust how many rooms to display
+
+### NEW: AI-Powered NPCs 🤖
+- **Intelligent Characters**: Create NPCs that respond using AI
+- **Personality System**: Define unique personalities for each NPC
+- **Knowledge Base**: Give NPCs specific information to share
+- **Natural Conversations**: Talk to NPCs using natural language
+- **Easy Configuration**: Set personality and knowledge with simple commands
+- **Note**: Requires AI API configuration (placeholder implementation included)
+
+### NEW: Rich Text Features ✨
+- **Structured Output**: Commands return formatted data for better display
+- **Clickable Elements**: Room names, objects, and exits are interactive
+- **Visual Enhancements**: Better formatting and organization
+- **Room Map Integration**: See your location visually
+- **Channel Messages**: Formatted with colors and sender information
+
 ## Installation
 
 ### Prerequisites
@@ -169,6 +205,80 @@ think [v(HP)]
 @set magic_sword=DAMAGE:[mul([v(POWER)],2)]
 ```
 
+### Using Channels
+
+```bash
+# List all available channels
+channel/list
+
+# Join a channel
+channel/join Public
+
+# Chat on a channel using its alias
+pub Hello everyone!
+
+# See who's on a channel
+channel/who Public
+
+# Leave a channel
+channel/leave Public
+
+# Create your own channel
+channel/create MyChannel=mc
+mc This is my custom channel!
+```
+
+### Using the Help System
+
+```bash
+# Show help categories
+help
+
+# Get help on a specific command
+help look
+help channel/join
+
+# See all commands
+help commands
+
+# Learn about building
+help building
+
+# Get softcode help
+help softcode
+```
+
+### Using AI-Powered NPCs
+
+```bash
+# Create an NPC
+@npc/create Sage
+
+# Set the NPC's personality
+@npc/personality Sage=Wise and mysterious wizard who speaks in riddles
+
+# Give the NPC knowledge
+@npc/knowledge Sage=Knows the location of ancient artifacts and the history of the realm
+
+# Talk to the NPC
+talk to Sage=Where can I find the crystal?
+# Sage says, "I heard you say: Where can I find the crystal?. AI integration is not yet configured."
+
+# Alternative syntax
+ask Sage=What do you know about magic?
+```
+
+**Note**: AI-powered responses require API configuration. The current implementation includes a placeholder. To enable full AI functionality, integrate with OpenAI or Anthropic's API in `backend/engine/commands.py:cmd_talk`.
+
+### Viewing the Room Map
+
+The room map is automatically displayed in the left sidebar. It shows:
+- All rooms connected to your current location
+- Exits between rooms as lines
+- Your current room highlighted in green
+- Click any room on the map to view information about it
+- Click "Refresh Map" to update the visualization
+
 ## REST API
 
 Web-Pennmush exposes a REST API for account management and queries:
@@ -178,6 +288,7 @@ Web-Pennmush exposes a REST API for account management and queries:
 - `GET /api/players/{id}` - Get player information
 - `GET /api/objects/{id}` - Get object information
 - `GET /api/rooms/{id}/contents` - Get room contents
+- `GET /api/rooms/map?center_room_id=0&radius=10` - Get room map graph data
 - `GET /api/stats` - Get server statistics
 
 ## WebSocket Protocol

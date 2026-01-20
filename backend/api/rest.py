@@ -193,3 +193,60 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
     stats["connected_players"] = result.scalar()
 
     return stats
+
+
+@router.get("/rooms/map")
+async def get_room_map(center_room_id: int = 0, radius: int = 10, db: AsyncSession = Depends(get_db)):
+    """
+    Get a map of rooms connected by exits.
+    Returns nodes (rooms) and edges (exits) for visualization.
+    """
+    obj_mgr = ObjectManager(db)
+
+    visited = set()
+    nodes = []
+    edges = []
+
+    async def traverse_rooms(room_id: int, depth: int):
+        """Recursively traverse connected rooms"""
+        if depth > radius or room_id in visited:
+            return
+
+        visited.add(room_id)
+        room = await obj_mgr.get_object(room_id)
+
+        if not room or room.type != ObjectType.ROOM:
+            return
+
+        # Add room node
+        nodes.append({
+            "id": room.id,
+            "name": room.name,
+            "description": room.description or "No description",
+            "type": "room"
+        })
+
+        # Get exits
+        exits = await obj_mgr.get_exits(room.id)
+        for exit_obj in exits:
+            if exit_obj.home_id:
+                # Add edge
+                edges.append({
+                    "id": exit_obj.id,
+                    "source": room.id,
+                    "target": exit_obj.home_id,
+                    "name": exit_obj.name,
+                    "type": "exit"
+                })
+
+                # Traverse to connected room
+                await traverse_rooms(exit_obj.home_id, depth + 1)
+
+    # Start traversal from center room
+    await traverse_rooms(center_room_id, 0)
+
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "center": center_room_id
+    }

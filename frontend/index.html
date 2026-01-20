@@ -42,9 +42,15 @@
                     <button onclick="sendCommand('look')">Look</button>
                     <button onclick="sendCommand('inventory')">Inventory</button>
                     <button onclick="sendCommand('who')">Who</button>
-                    <button onclick="sendCommand('@stats')">Stats</button>
+                    <button onclick="sendCommand('channel/list')">Channels</button>
                     <button onclick="sendCommand('help')">Help</button>
                 </div>
+            </div>
+
+            <div class="panel">
+                <h2>Room Map</h2>
+                <div id="room-map-container"></div>
+                <button onclick="roomMapVisualizer.loadMap(0, 5)" style="width: 100%; margin-top: 0.5rem; padding: 0.5rem; background: var(--bg-tertiary); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 4px; cursor: pointer;">Refresh Map</button>
             </div>
         </aside>
 
@@ -143,7 +149,7 @@
 
     <!-- Footer -->
     <footer class="footer">
-        <span>Web-Pennmush v1.0.0 by Jordan Koch</span>
+        <span>Web-Pennmush v2.0.0 by Jordan Koch</span>
         <span>|</span>
         <span>Inspired by PennMUSH</span>
         <span>|</span>
@@ -153,6 +159,7 @@
     <!-- Scripts -->
     <script src="/static/js/websocket.js"></script>
     <script src="/static/js/ui.js"></script>
+    <script src="/static/js/roommap.js"></script>
     <script src="/static/js/app.js"></script>
 </body>
 </html>

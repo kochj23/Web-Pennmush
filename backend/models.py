@@ -160,3 +160,92 @@ class Mail(Base):
 
     def __repr__(self):
         return f"<Mail(id={self.id}, from={self.sender_id}, to={self.recipient_id})>"
+
+
+class Channel(Base):
+    """
+    Communication channels for group chat.
+    Players can join channels and broadcast messages to all members.
+    """
+    __tablename__ = "channels"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), unique=True, nullable=False, index=True)
+    alias = Column(String(50), nullable=True)  # Short alias for quick access
+    description = Column(Text, nullable=True)
+    owner_id = Column(Integer, ForeignKey("objects.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    is_public = Column(Boolean, default=True)  # Public channels vs private
+    is_moderated = Column(Boolean, default=False)  # Requires approval to join
+    flags = Column(String(255), default="", nullable=False)  # Channel flags
+
+    # Relationships
+    owner = relationship("DBObject", backref="owned_channels")
+
+    def __repr__(self):
+        return f"<Channel(id={self.id}, name='{self.name}')>"
+
+
+class ChannelMembership(Base):
+    """
+    Tracks which players are subscribed to which channels.
+    """
+    __tablename__ = "channel_memberships"
+
+    id = Column(Integer, primary_key=True, index=True)
+    channel_id = Column(Integer, ForeignKey("channels.id"), nullable=False, index=True)
+    player_id = Column(Integer, ForeignKey("objects.id"), nullable=False, index=True)
+    joined_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    is_muted = Column(Boolean, default=False)  # Player muted the channel
+    is_moderator = Column(Boolean, default=False)  # Can moderate the channel
+
+    # Relationships
+    channel = relationship("Channel", backref="memberships")
+    player = relationship("DBObject", backref="channel_memberships")
+
+    def __repr__(self):
+        return f"<ChannelMembership(channel_id={self.channel_id}, player_id={self.player_id})>"
+
+
+class HelpTopic(Base):
+    """
+    Help system topics for in-game documentation.
+    """
+    __tablename__ = "help_topics"
+
+    id = Column(Integer, primary_key=True, index=True)
+    topic = Column(String(255), unique=True, nullable=False, index=True)
+    category = Column(String(100), nullable=False, index=True)  # commands, building, softcode, etc.
+    content = Column(Text, nullable=False)
+    aliases = Column(String(500), nullable=True)  # Comma-separated aliases
+    related_topics = Column(String(500), nullable=True)  # Comma-separated related topics
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    modified_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<HelpTopic(id={self.id}, topic='{self.topic}')>"
+
+
+class NPC(Base):
+    """
+    AI-powered NPCs with personality and knowledge base.
+    """
+    __tablename__ = "npcs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    object_id = Column(Integer, ForeignKey("objects.id"), nullable=False, unique=True)
+    personality = Column(Text, nullable=False)  # AI personality description
+    knowledge_base = Column(Text, nullable=True)  # Context for AI responses
+    ai_model = Column(String(100), default="gpt-4", nullable=False)  # AI model to use
+    temperature = Column(Integer, default=7, nullable=False)  # 0-10 scale (divide by 10 for API)
+    max_tokens = Column(Integer, default=150, nullable=False)
+    conversation_history = Column(Text, nullable=True)  # JSON array of recent messages
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    modified_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    # Relationships
+    object = relationship("DBObject", backref="npc_data")
+
+    def __repr__(self):
+        return f"<NPC(id={self.id}, object_id={self.object_id})>"

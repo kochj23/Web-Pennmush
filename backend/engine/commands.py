@@ -8,6 +8,7 @@ from typing import Dict, Callable, Optional, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.models import DBObject, ObjectType
 from backend.engine.objects import ObjectManager
+from backend.engine.channels import ChannelManager, HelpManager
 from datetime import datetime
 import re
 
@@ -21,6 +22,8 @@ class CommandParser:
     def __init__(self, session: AsyncSession):
         self.session = session
         self.obj_mgr = ObjectManager(session)
+        self.channel_mgr = ChannelManager(session)
+        self.help_mgr = HelpManager(session)
         self.commands: Dict[str, Callable] = {}
         self._register_commands()
 
@@ -51,6 +54,20 @@ class CommandParser:
         # Information commands
         self.register_command("who", self.cmd_who)
         self.register_command("@stats", self.cmd_stats)
+
+        # Channel commands
+        self.register_command("channel/list", self.cmd_channel_list, ["channels"])
+        self.register_command("channel/join", self.cmd_channel_join)
+        self.register_command("channel/leave", self.cmd_channel_leave)
+        self.register_command("channel/who", self.cmd_channel_who)
+        self.register_command("channel/create", self.cmd_channel_create)
+
+        # NPC commands
+        self.register_command("@npc/create", self.cmd_npc_create)
+        self.register_command("@npc/personality", self.cmd_npc_personality)
+        self.register_command("@npc/knowledge", self.cmd_npc_knowledge)
+        self.register_command("talk", self.cmd_talk)
+        self.register_command("ask", self.cmd_ask)
 
     def register_command(self, name: str, handler: Callable, aliases: list = None):
         """Register a command with optional aliases"""
@@ -90,10 +107,16 @@ class CommandParser:
             except Exception as e:
                 return f"Error executing command: {str(e)}"
         else:
+            # Try to interpret as channel alias (e.g., "pub Hello!")
+            channel_result = await self._try_channel_message(player, command, args)
+            if channel_result:
+                return channel_result
+
             # Try to interpret as exit name
             exit_result = await self._try_exit(player, command)
             if exit_result:
                 return exit_result
+
             return f"Huh? (Type 'help' for commands)"
 
     async def _try_exit(self, player: DBObject, exit_name: str) -> Optional[str]:
@@ -261,32 +284,7 @@ class CommandParser:
 
     async def cmd_help(self, player: DBObject, args: str) -> str:
         """Display help information"""
-        return """
-=== Web-Pennmush Command Help ===
-
-BASIC COMMANDS:
-  look [object]       - Look at room or object (alias: l)
-  examine <object>    - Examine object in detail (alias: ex)
-  go <exit>           - Go through an exit
-  say <message>       - Say something (alias: ")
-  pose <action>       - Pose an action (alias: :)
-  get <object>        - Pick up an object (alias: take)
-  drop <object>       - Drop an object
-  inventory           - See what you're carrying (alias: i)
-  who                 - See who's online
-  help                - This help (alias: ?)
-
-BUILDING COMMANDS:
-  @create <name>      - Create a new object
-  @dig <name>         - Create a new room
-  @open <name>        - Create an exit
-  @describe <obj>=<desc> - Set object description (alias: @desc)
-  @set <obj>=<flag>   - Set a flag on an object
-  @destroy <object>   - Destroy an object (alias: @nuke)
-  @stats              - Show database statistics
-
-For more help, visit the Web-Pennmush documentation.
-        """
+        return await self.help_mgr.format_help(args if args else None)
 
     async def cmd_get(self, player: DBObject, args: str) -> str:
         """Pick up an object"""
@@ -491,3 +489,249 @@ For more help, visit the Web-Pennmush documentation.
         for obj_type, count in stats.items():
             output.append(f"  {obj_type}s: {count}")
         return "\n".join(output)
+
+    # ==================== CHANNEL COMMANDS ====================
+
+    async def _try_channel_message(self, player: DBObject, alias: str, message: str) -> Optional[str]:
+        """Try to send a message to a channel by alias"""
+        if not message:
+            return None
+
+        channel = await self.channel_mgr.get_channel_by_name(alias)
+        if not channel:
+            return None
+
+        # Check if player is a member
+        if not await self.channel_mgr.is_member(channel.id, player.id):
+            return None
+
+        # Broadcast message (will be handled by WebSocket manager)
+        return f"[{channel.name}] {player.name}: {message}"
+
+    async def cmd_channel_list(self, player: DBObject, args: str) -> str:
+        """List all channels"""
+        return await self.channel_mgr.format_channel_list(player.id)
+
+    async def cmd_channel_join(self, player: DBObject, args: str) -> str:
+        """Join a channel"""
+        if not args:
+            return "Usage: channel/join <channel name>"
+
+        channel = await self.channel_mgr.get_channel_by_name(args)
+        if not channel:
+            return f"Channel '{args}' not found. Use 'channel/list' to see available channels."
+
+        if await self.channel_mgr.join_channel(channel.id, player.id):
+            return f"You have joined the {channel.name} channel. Use '{channel.alias}' to chat."
+        else:
+            return f"You are already a member of the {channel.name} channel."
+
+    async def cmd_channel_leave(self, player: DBObject, args: str) -> str:
+        """Leave a channel"""
+        if not args:
+            return "Usage: channel/leave <channel name>"
+
+        channel = await self.channel_mgr.get_channel_by_name(args)
+        if not channel:
+            return f"Channel '{args}' not found."
+
+        if await self.channel_mgr.leave_channel(channel.id, player.id):
+            return f"You have left the {channel.name} channel."
+        else:
+            return f"You are not a member of the {channel.name} channel."
+
+    async def cmd_channel_who(self, player: DBObject, args: str) -> str:
+        """Show who's on a channel"""
+        if not args:
+            return "Usage: channel/who <channel name>"
+
+        channel = await self.channel_mgr.get_channel_by_name(args)
+        if not channel:
+            return f"Channel '{args}' not found."
+
+        members = await self.channel_mgr.get_members(channel.id)
+        if not members:
+            return f"No one is on the {channel.name} channel."
+
+        output = [f"=== {channel.name} Channel Members ==="]
+        for member in members:
+            status = "Online" if member.is_connected else "Offline"
+            output.append(f"  {member.name}(#{member.id}) - {status}")
+        output.append(f"\nTotal: {len(members)} member(s)")
+        return "\n".join(output)
+
+    async def cmd_channel_create(self, player: DBObject, args: str) -> str:
+        """Create a new channel"""
+        if not args:
+            return "Usage: channel/create <name>[=<alias>]"
+
+        # Parse name=alias
+        if "=" in args:
+            name, alias = args.split("=", 1)
+            name = name.strip()
+            alias = alias.strip()
+        else:
+            name = args.strip()
+            alias = name[:3].lower()  # Auto-generate alias
+
+        # Check if channel already exists
+        existing = await self.channel_mgr.get_channel_by_name(name)
+        if existing:
+            return f"A channel named '{name}' already exists."
+
+        channel = await self.channel_mgr.create_channel(
+            name=name,
+            owner_id=player.id,
+            alias=alias,
+            description=f"Created by {player.name}"
+        )
+
+        return f"Channel '{channel.name}' created with alias '{channel.alias}'. Use '{channel.alias} <message>' to chat."
+
+    # ==================== NPC COMMANDS ====================
+
+    async def cmd_npc_create(self, player: DBObject, args: str) -> str:
+        """Create an AI-powered NPC"""
+        if not args:
+            return "Usage: @npc/create <name>"
+
+        from backend.models import NPC
+
+        # Create the object
+        npc_obj = await self.obj_mgr.create_object(
+            name=args,
+            obj_type=ObjectType.THING,
+            owner_id=player.id,
+            location_id=player.location_id,
+            description=f"An AI-powered NPC named {args}.",
+            flags="VISIBLE,NPC"
+        )
+
+        # Create NPC data
+        npc = NPC(
+            object_id=npc_obj.id,
+            personality="A helpful and friendly character.",
+            knowledge_base="General knowledge about the MUSH.",
+            ai_model="gpt-4",
+            temperature=7,
+            is_active=True
+        )
+        self.session.add(npc)
+        await self.session.commit()
+
+        return f"Created NPC: {npc_obj.name}(#{npc_obj.id})\nUse '@npc/personality' and '@npc/knowledge' to configure."
+
+    async def cmd_npc_personality(self, player: DBObject, args: str) -> str:
+        """Set NPC personality"""
+        if "=" not in args:
+            return "Usage: @npc/personality <npc>=<personality description>"
+
+        npc_name, personality = args.split("=", 1)
+        npc_name = npc_name.strip()
+        personality = personality.strip()
+
+        # Find NPC
+        npc_obj = await self.obj_mgr.get_object_by_name(npc_name, player.location_id)
+        if not npc_obj:
+            return f"NPC '{npc_name}' not found here."
+
+        # Get NPC data
+        from backend.models import NPC
+        from sqlalchemy import select
+
+        query = select(NPC).where(NPC.object_id == npc_obj.id)
+        result = await self.session.execute(query)
+        npc = result.scalar_one_or_none()
+
+        if not npc:
+            return f"{npc_obj.name} is not an NPC."
+
+        npc.personality = personality
+        await self.session.commit()
+
+        return f"Personality set for {npc_obj.name}: {personality}"
+
+    async def cmd_npc_knowledge(self, player: DBObject, args: str) -> str:
+        """Set NPC knowledge base"""
+        if "=" not in args:
+            return "Usage: @npc/knowledge <npc>=<knowledge>"
+
+        npc_name, knowledge = args.split("=", 1)
+        npc_name = npc_name.strip()
+        knowledge = knowledge.strip()
+
+        # Find NPC
+        npc_obj = await self.obj_mgr.get_object_by_name(npc_name, player.location_id)
+        if not npc_obj:
+            return f"NPC '{npc_name}' not found here."
+
+        # Get NPC data
+        from backend.models import NPC
+        from sqlalchemy import select
+
+        query = select(NPC).where(NPC.object_id == npc_obj.id)
+        result = await self.session.execute(query)
+        npc = result.scalar_one_or_none()
+
+        if not npc:
+            return f"{npc_obj.name} is not an NPC."
+
+        npc.knowledge_base = knowledge
+        await self.session.commit()
+
+        return f"Knowledge base set for {npc_obj.name}."
+
+    async def cmd_talk(self, player: DBObject, args: str) -> str:
+        """Talk to an NPC"""
+        if " to " not in args.lower() or "=" not in args:
+            return "Usage: talk to <npc>=<message>"
+
+        # Parse: talk to <npc>=<message>
+        parts = args.lower().split(" to ", 1)
+        if len(parts) < 2:
+            return "Usage: talk to <npc>=<message>"
+
+        rest = parts[1]
+        if "=" not in rest:
+            return "Usage: talk to <npc>=<message>"
+
+        npc_name, message = rest.split("=", 1)
+        npc_name = npc_name.strip()
+        message = message.strip()
+
+        # Find NPC
+        npc_obj = await self.obj_mgr.get_object_by_name(npc_name, player.location_id)
+        if not npc_obj:
+            return f"NPC '{npc_name}' not found here."
+
+        # Get NPC data
+        from backend.models import NPC
+        from sqlalchemy import select
+
+        query = select(NPC).where(NPC.object_id == npc_obj.id)
+        result = await self.session.execute(query)
+        npc = result.scalar_one_or_none()
+
+        if not npc or not npc.is_active:
+            return f"{npc_obj.name} is not an NPC or is not active."
+
+        # Generate AI response (placeholder - would integrate with OpenAI/Anthropic API)
+        # For now, return a simple response
+        response = f"{npc_obj.name} says, \"I heard you say: {message}. AI integration is not yet configured.\""
+
+        return response
+
+    async def cmd_ask(self, player: DBObject, args: str) -> str:
+        """Ask an NPC a question (alias for talk)"""
+        if "=" not in args:
+            # Convert "ask npc about topic" to "talk to npc=about topic"
+            parts = args.split(None, 1)
+            if len(parts) < 2:
+                return "Usage: ask <npc>=<question>"
+            npc_name = parts[0]
+            question = parts[1] if len(parts) > 1 else ""
+            return await self.cmd_talk(player, f"to {npc_name}={question}")
+        else:
+            # "ask npc=question" format
+            npc_name, question = args.split("=", 1)
+            return await self.cmd_talk(player, f"to {npc_name.strip()}={question.strip()}")
