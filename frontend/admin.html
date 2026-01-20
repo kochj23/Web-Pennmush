@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web-Pennmush Admin Dashboard</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1rem;
+            padding: 1rem;
+        }
+        .dashboard-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1.5rem;
+        }
+        .dashboard-card h2 {
+            color: var(--text-accent);
+            margin-bottom: 1rem;
+            font-size: 1.2rem;
+        }
+        .stat-value {
+            font-size: 2.5rem;
+            color: var(--text-accent);
+            font-weight: bold;
+        }
+        .stat-label {
+            color: var(--text-secondary);
+            margin-top: 0.5rem;
+        }
+        .action-button {
+            background: var(--text-accent);
+            color: var(--bg-primary);
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 0.25rem;
+        }
+        .danger-button {
+            background: var(--error-color);
+        }
+        .table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1rem;
+        }
+        .table th, .table td {
+            padding: 0.5rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .table th {
+            color: var(--text-accent);
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <h1>🛡️ Admin Dashboard</h1>
+        <div class="header-info">
+            <span id="admin-name"></span>
+            <a href="/" style="color: var(--text-accent); text-decoration: none; margin-left: 2rem;">← Back to Game</a>
+        </div>
+    </header>
+
+    <div class="dashboard-grid">
+        <!-- Server Stats -->
+        <div class="dashboard-card">
+            <h2>Server Statistics</h2>
+            <div id="server-stats">
+                <div><span class="stat-value" id="stat-players">0</span><div class="stat-label">Players</div></div>
+                <div style="margin-top: 1rem;"><span class="stat-value" id="stat-rooms">0</span><div class="stat-label">Rooms</div></div>
+                <div style="margin-top: 1rem;"><span class="stat-value" id="stat-objects">0</span><div class="stat-label">Objects</div></div>
+            </div>
+            <button class="action-button" onclick="refreshStats()">Refresh</button>
+        </div>
+
+        <!-- Online Players -->
+        <div class="dashboard-card">
+            <h2>Online Players</h2>
+            <div id="online-players">Loading...</div>
+            <button class="action-button" onclick="refreshPlayers()">Refresh</button>
+        </div>
+
+        <!-- Active Bans -->
+        <div class="dashboard-card">
+            <h2>Active Bans</h2>
+            <div id="ban-list">No active bans</div>
+            <button class="action-button" onclick="refreshBans()">Refresh</button>
+        </div>
+
+        <!-- Economy -->
+        <div class="dashboard-card">
+            <h2>Economy</h2>
+            <div id="economy-stats">Loading...</div>
+            <button class="action-button" onclick="refreshEconomy()">Refresh</button>
+        </div>
+
+        <!-- Quests -->
+        <div class="dashboard-card">
+            <h2>Active Quests</h2>
+            <div id="quest-stats">Loading...</div>
+            <button class="action-button" onclick="refreshQuests()">Refresh</button>
+        </div>
+
+        <!-- AI Status -->
+        <div class="dashboard-card">
+            <h2>AI Backend</h2>
+            <div id="ai-status">Loading...</div>
+        </div>
+
+        <!-- Quick Actions -->
+        <div class="dashboard-card">
+            <h2>Quick Actions</h2>
+            <button class="action-button" onclick="broadcastMessage()">Broadcast Message</button>
+            <button class="action-button" onclick="createQuest()">Create Quest</button>
+            <button class="action-button" onclick="grantCredits()">Grant Credits</button>
+            <button class="action-button danger-button" onclick="shutdownServer()">Shutdown Server</button>
+        </div>
+
+        <!-- Recent Activity -->
+        <div class="dashboard-card" style="grid-column: 1 / -1;">
+            <h2>Recent Activity</h2>
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>Player</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody id="activity-table">
+                    <tr><td colspan="3">No recent activity</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        // Auto-refresh dashboard
+        async function refreshAll() {
+            await refreshStats();
+            await refreshPlayers();
+            await refreshBans();
+            await refreshEconomy();
+            await refreshQuests();
+            await checkAI();
+        }
+
+        async function refreshStats() {
+            try {
+                const response = await fetch('/api/stats');
+                const stats = await response.json();
+                document.getElementById('stat-players').textContent = stats.players || 0;
+                document.getElementById('stat-rooms').textContent = stats.rooms || 0;
+                document.getElementById('stat-objects').textContent = (stats.things || 0) + (stats.exits || 0);
+            } catch (error) {
+                console.error('Error fetching stats:', error);
+            }
+        }
+
+        async function refreshPlayers() {
+            try {
+                const response = await fetch('/api/players');
+                const players = await response.json();
+                const online = players.filter(p => p.is_connected);
+
+                const container = document.getElementById('online-players');
+                if (online.length === 0) {
+                    container.innerHTML = '<p>No players online</p>';
+                } else {
+                    container.innerHTML = online.map(p =>
+                        `<div>${p.name} (#${p.id})</div>`
+                    ).join('');
+                }
+            } catch (error) {
+                console.error('Error fetching players:', error);
+            }
+        }
+
+        async function refreshBans() {
+            // TODO: Add API endpoint for ban list
+            document.getElementById('ban-list').innerHTML = '<p>Ban API not yet implemented</p>';
+        }
+
+        async function refreshEconomy() {
+            document.getElementById('economy-stats').innerHTML = '<p>Economy stats API not yet implemented</p>';
+        }
+
+        async function refreshQuests() {
+            document.getElementById('quest-stats').innerHTML = '<p>Quest stats API not yet implemented</p>';
+        }
+
+        async function checkAI() {
+            document.getElementById('ai-status').innerHTML = '<p>AI status: Check in-game with @ai/status</p>';
+        }
+
+        function broadcastMessage() {
+            const message = prompt('Enter message to broadcast to all players:');
+            if (message) {
+                alert('Broadcast feature requires WebSocket integration');
+            }
+        }
+
+        function createQuest() {
+            alert('Use in-game command: @quest/create <name>=<description>/<reward>');
+        }
+
+        function grantCredits() {
+            const player = prompt('Player name:');
+            const amount = prompt('Amount:');
+            if (player && amount) {
+                alert(`Use in-game command: @economy/grant ${player}=${amount}`);
+            }
+        }
+
+        function shutdownServer() {
+            if (confirm('Are you sure you want to shutdown the server?')) {
+                alert('Shutdown command not yet implemented');
+            }
+        }
+
+        // Initial load
+        refreshAll();
+
+        // Auto-refresh every 30 seconds
+        setInterval(refreshAll, 30000);
+    </script>
+</body>
+</html>

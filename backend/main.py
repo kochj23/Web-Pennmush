@@ -67,6 +67,12 @@ async def root():
     return FileResponse("frontend/index.html")
 
 
+@app.get("/admin")
+async def admin_dashboard():
+    """Serve the admin dashboard"""
+    return FileResponse("frontend/admin.html")
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for MUSH gameplay"""

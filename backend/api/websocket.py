@@ -11,8 +11,9 @@ from backend.database import AsyncSessionLocal
 from backend.models import DBObject, ObjectType
 from backend.engine.commands import CommandParser
 from backend.engine.objects import ObjectManager
+from backend.security import rate_limiter, input_validator, security_logger
 from passlib.context import CryptContext
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 
 
@@ -30,6 +31,8 @@ class ConnectionManager:
         self.active_connections: Dict[int, WebSocket] = {}
         # Track sessions: websocket -> player_id
         self.session_map: Dict[WebSocket, int] = {}
+        # Track last activity: player_id -> datetime
+        self.last_activity: Dict[int, datetime] = {}
 
     async def connect(self, websocket: WebSocket, player_id: int):
         """Register a new connection"""
@@ -108,6 +111,20 @@ async def handle_websocket(websocket: WebSocket):
             await websocket.close()
             return
 
+        # Rate limiting for login attempts
+        if not rate_limiter.is_allowed(username, "login"):
+            security_logger.log_rate_limit_exceeded(username, "login")
+            await websocket.send_json({"type": "error", "message": "Too many login attempts. Please wait a minute."})
+            await websocket.close()
+            return
+
+        # Validate username format
+        is_valid, error = input_validator.validate_name(username)
+        if not is_valid:
+            await websocket.send_json({"type": "error", "message": f"Invalid username: {error}"})
+            await websocket.close()
+            return
+
         # Authenticate player
         session = AsyncSessionLocal()
         obj_mgr = ObjectManager(session)
@@ -115,12 +132,14 @@ async def handle_websocket(websocket: WebSocket):
         player = await obj_mgr.get_object_by_name(username)
 
         if not player or player.type != ObjectType.PLAYER:
+            security_logger.log_failed_login(username, "websocket")
             await websocket.send_json({"type": "error", "message": "Invalid username or password"})
             await websocket.close()
             return
 
         # Verify password
         if not pwd_context.verify(password, player.password_hash):
+            security_logger.log_failed_login(username, "websocket")
             await websocket.send_json({"type": "error", "message": "Invalid username or password"})
             await websocket.close()
             return
@@ -133,6 +152,7 @@ async def handle_websocket(websocket: WebSocket):
 
         # Register connection
         await manager.connect(websocket, player_id)
+        manager.last_activity[player_id] = datetime.utcnow()
 
         # Send welcome message
         welcome_msg = {
@@ -162,9 +182,26 @@ async def handle_websocket(websocket: WebSocket):
             msg_type = data.get("type")
 
             if msg_type == "command":
+                # Update activity timestamp
+                manager.last_activity[player_id] = datetime.utcnow()
+
                 # Process MUSH command
                 command = data.get("command", "").strip()
                 if command:
+                    # Rate limiting for commands
+                    if not rate_limiter.is_allowed(str(player_id), "command"):
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": "You're sending commands too fast. Please slow down."
+                        })
+                        continue
+
+                    # Validate command
+                    is_valid, error = input_validator.validate_command(command)
+                    if not is_valid:
+                        await websocket.send_json({"type": "error", "message": error})
+                        continue
+
                     output = await cmd_parser.parse(player, command)
                     if output:
                         await websocket.send_json({"type": "output", "message": output})

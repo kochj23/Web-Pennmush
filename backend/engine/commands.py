@@ -9,6 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.models import DBObject, ObjectType
 from backend.engine.objects import ObjectManager
 from backend.engine.channels import ChannelManager, HelpManager
+from backend.engine.locks import LockManager
+from backend.engine.mail import MailManager
+from backend.engine.pages import PageManager
+from backend.engine.moderation import ModerationManager
+from backend.engine.quests import QuestManager
+from backend.engine.economy import EconomyManager
+from backend.security import input_validator
 from datetime import datetime
 import re
 import json
@@ -25,6 +32,12 @@ class CommandParser:
         self.obj_mgr = ObjectManager(session)
         self.channel_mgr = ChannelManager(session)
         self.help_mgr = HelpManager(session)
+        self.lock_mgr = LockManager(session)
+        self.mail_mgr = MailManager(session)
+        self.page_mgr = PageManager(session)
+        self.mod_mgr = ModerationManager(session)
+        self.quest_mgr = QuestManager(session)
+        self.economy_mgr = EconomyManager(session)
         self.commands: Dict[str, Callable] = {}
         self._register_commands()
 
@@ -73,6 +86,44 @@ class CommandParser:
         # AI commands
         self.register_command("guide", self.cmd_guide, ["ai"])
         self.register_command("@ai/status", self.cmd_ai_status)
+
+        # Lock commands
+        self.register_command("@lock", self.cmd_lock)
+        self.register_command("@unlock", self.cmd_unlock)
+        self.register_command("@lock/list", self.cmd_lock_list)
+
+        # Mail commands
+        self.register_command("@mail", self.cmd_mail)
+        self.register_command("@mail/list", self.cmd_mail_list, ["@mailist"])
+        self.register_command("@mail/read", self.cmd_mail_read)
+        self.register_command("@mail/delete", self.cmd_mail_delete)
+
+        # Page commands
+        self.register_command("page", self.cmd_page)
+        self.register_command("page/list", self.cmd_page_list)
+
+        # Moderation commands
+        self.register_command("@ban", self.cmd_ban)
+        self.register_command("@unban", self.cmd_unban)
+        self.register_command("@kick", self.cmd_kick)
+        self.register_command("@muzzle", self.cmd_muzzle)
+        self.register_command("@unmuzzle", self.cmd_unmuzzle)
+        self.register_command("@ban/list", self.cmd_ban_list)
+
+        # Quest commands
+        self.register_command("quest/list", self.cmd_quest_list, ["quests"])
+        self.register_command("quest/start", self.cmd_quest_start)
+        self.register_command("quest/progress", self.cmd_quest_progress, ["quest/status"])
+        self.register_command("quest/log", self.cmd_quest_log)
+        self.register_command("@quest/create", self.cmd_quest_create)
+        self.register_command("@quest/addstep", self.cmd_quest_addstep)
+
+        # Economy commands
+        self.register_command("balance", self.cmd_balance, ["credits", "money"])
+        self.register_command("give", self.cmd_give)
+        self.register_command("transactions", self.cmd_transactions, ["trans"])
+        self.register_command("@economy/grant", self.cmd_economy_grant)
+        self.register_command("@economy/stats", self.cmd_economy_stats)
 
     def register_command(self, name: str, handler: Callable, aliases: list = None):
         """Register a command with optional aliases"""
@@ -337,6 +388,11 @@ class CommandParser:
         if not args:
             return "Create what?"
 
+        # Validate name
+        is_valid, error = input_validator.validate_name(args)
+        if not is_valid:
+            return f"Cannot create object: {error}"
+
         obj = await self.obj_mgr.create_object(
             name=args,
             obj_type=ObjectType.THING,
@@ -350,6 +406,11 @@ class CommandParser:
         """Create a new room"""
         if not args:
             return "Dig what?"
+
+        # Validate name
+        is_valid, error = input_validator.validate_name(args)
+        if not is_valid:
+            return f"Cannot create room: {error}"
 
         room = await self.obj_mgr.create_object(
             name=args,
@@ -403,6 +464,11 @@ class CommandParser:
         obj_name, description = args.split("=", 1)
         obj_name = obj_name.strip()
         description = description.strip()
+
+        # Validate description
+        is_valid, error = input_validator.validate_description(description)
+        if not is_valid:
+            return f"Cannot set description: {error}"
 
         if obj_name.lower() == "here":
             obj = await self.obj_mgr.get_object(player.location_id)
@@ -851,5 +917,506 @@ Then try 'guide' again!"""
             output.append("\nTo enable AI:")
             output.append("  Option 1: Install Ollama from https://ollama.ai")
             output.append("  Option 2: pip install mlx-lm (Apple Silicon only)")
+
+        return "\n".join(output)
+
+    # ==================== LOCK COMMANDS ====================
+
+    async def cmd_lock(self, player: DBObject, args: str) -> str:
+        """Set a lock on an object"""
+        if "=" not in args or "/" not in args:
+            return "Usage: @lock/<type> <object>=<lock key>\nExample: @lock/use sword=#123|WIZARD"
+
+        # Parse: @lock/<type> becomes just the args
+        # But since we registered "@lock", we need to handle the type in args
+        # Expected: @lock object/type=key
+        if "/" not in args.split("=")[0]:
+            return "Usage: @lock/<type> <object>=<lock key>\nExample: @lock/use sword=#123"
+
+        obj_spec, lock_key = args.split("=", 1)
+        obj_name, lock_type = obj_spec.rsplit("/", 1)
+        obj_name = obj_name.strip()
+        lock_type = lock_type.strip().lower()
+        lock_key = lock_key.strip()
+
+        # Find object
+        if obj_name.lower() == "here":
+            obj = await self.obj_mgr.get_object(player.location_id)
+        elif obj_name.lower() == "me":
+            obj = player
+        else:
+            obj = await self.obj_mgr.get_object_by_name(obj_name, player.location_id)
+
+        if not obj:
+            return f"I don't see '{obj_name}' here."
+
+        # Set lock
+        await self.lock_mgr.set_lock(obj.id, lock_type, lock_key)
+        return f"Lock '{lock_type}' set on {obj.name}(#{obj.id}): {lock_key}"
+
+    async def cmd_unlock(self, player: DBObject, args: str) -> str:
+        """Remove a lock from an object"""
+        if "/" not in args:
+            return "Usage: @unlock/<type> <object>\nExample: @unlock/use sword"
+
+        obj_name, lock_type = args.rsplit("/", 1)
+        obj_name = obj_name.strip()
+        lock_type = lock_type.strip().lower()
+
+        # Find object
+        obj = await self.obj_mgr.get_object_by_name(obj_name, player.location_id)
+        if not obj:
+            return f"I don't see '{obj_name}' here."
+
+        # Remove lock
+        if await self.lock_mgr.remove_lock(obj.id, lock_type):
+            return f"Lock '{lock_type}' removed from {obj.name}(#{obj.id})"
+        else:
+            return f"No '{lock_type}' lock found on {obj.name}(#{obj.id})"
+
+    async def cmd_lock_list(self, player: DBObject, args: str) -> str:
+        """List all locks on an object"""
+        if not args:
+            args = "me"
+
+        obj = await self.obj_mgr.get_object_by_name(args, player.location_id)
+        if not obj:
+            return f"I don't see '{args}' here."
+
+        locks = await self.lock_mgr.list_locks(obj.id)
+        if not locks:
+            return f"{obj.name}(#{obj.id}) has no locks."
+
+        output = [f"=== Locks on {obj.name}(#{obj.id}) ==="]
+        for lock in locks:
+            output.append(f"  {lock.lock_type}: {lock.lock_key}")
+
+        return "\n".join(output)
+
+    # ==================== MAIL COMMANDS ====================
+
+    async def cmd_mail(self, player: DBObject, args: str) -> str:
+        """Send mail to a player"""
+        if "=" not in args or "/" not in args:
+            return "Usage: @mail <player>=<subject>/<message>"
+
+        recipient_name, content = args.split("=", 1)
+        recipient_name = recipient_name.strip()
+
+        if "/" not in content:
+            return "Usage: @mail <player>=<subject>/<message>"
+
+        subject, message = content.split("/", 1)
+        subject = subject.strip()
+        message = message.strip()
+
+        # Validate message
+        is_valid, error = input_validator.validate_message(message)
+        if not is_valid:
+            return f"Cannot send mail: {error}"
+
+        # Find recipient
+        recipient = await self.obj_mgr.get_object_by_name(recipient_name)
+        if not recipient or recipient.type != ObjectType.PLAYER:
+            return f"Player '{recipient_name}' not found."
+
+        # Send mail
+        mail = await self.mail_mgr.send_mail(player.id, recipient.id, subject, message)
+        return f"Mail sent to {recipient.name}(#{recipient.id})"
+
+    async def cmd_mail_list(self, player: DBObject, args: str) -> str:
+        """List mail inbox"""
+        inbox = await self.mail_mgr.get_inbox(player.id)
+        return await self.mail_mgr.format_mail_list(inbox, show_full=True)
+
+    async def cmd_mail_read(self, player: DBObject, args: str) -> str:
+        """Read a mail message"""
+        if not args:
+            return "Usage: @mail/read <#>"
+
+        try:
+            mail_id = int(args.strip())
+        except ValueError:
+            return "Mail ID must be a number."
+
+        mail = await self.mail_mgr.read_mail(mail_id, player.id)
+        if not mail:
+            return f"Mail #{mail_id} not found in your inbox."
+
+        sender = await self.session.get(DBObject, mail.sender_id)
+        sender_name = sender.name if sender else f"#{mail.sender_id}"
+
+        output = [
+            f"=== Mail #{mail.id} ===",
+            f"From: {sender_name}(#{mail.sender_id})",
+            f"Date: {mail.sent_at.strftime('%Y-%m-%d %H:%M')}",
+            f"Subject: {mail.subject}",
+            "",
+            mail.message
+        ]
+
+        return "\n".join(output)
+
+    async def cmd_mail_delete(self, player: DBObject, args: str) -> str:
+        """Delete a mail message"""
+        if not args:
+            return "Usage: @mail/delete <#>"
+
+        try:
+            mail_id = int(args.strip())
+        except ValueError:
+            return "Mail ID must be a number."
+
+        if await self.mail_mgr.delete_mail(mail_id, player.id):
+            return f"Mail #{mail_id} deleted."
+        else:
+            return f"Mail #{mail_id} not found in your inbox."
+
+    # ==================== PAGE COMMANDS ====================
+
+    async def cmd_page(self, player: DBObject, args: str) -> str:
+        """Send a page (direct message) to a player"""
+        if "=" not in args:
+            return "Usage: page <player>=<message>"
+
+        recipient_name, message = args.split("=", 1)
+        recipient_name = recipient_name.strip()
+        message = message.strip()
+
+        # Validate message
+        is_valid, error = input_validator.validate_message(message)
+        if not is_valid:
+            return f"Cannot send page: {error}"
+
+        # Find recipient
+        recipient = await self.obj_mgr.get_object_by_name(recipient_name)
+        if not recipient or recipient.type != ObjectType.PLAYER:
+            return f"Player '{recipient_name}' not found."
+
+        if not recipient.is_connected:
+            return f"{recipient.name} is not connected. Consider using @mail instead."
+
+        # Send page
+        await self.page_mgr.send_page(player.id, recipient.id, message)
+
+        # TODO: Broadcast page to recipient via WebSocket
+        return f"You paged {recipient.name}: {message}"
+
+    async def cmd_page_list(self, player: DBObject, args: str) -> str:
+        """List recent pages"""
+        return await self.page_mgr.format_page_history(player.id)
+
+    # ==================== MODERATION COMMANDS ====================
+
+    async def cmd_ban(self, player: DBObject, args: str) -> str:
+        """Ban a player"""
+        # Check if player is admin
+        if not self.obj_mgr.has_flag(player, "WIZARD") and not self.obj_mgr.has_flag(player, "GOD"):
+            return "Permission denied. You must be a wizard or admin."
+
+        if "=" not in args:
+            return "Usage: @ban <player>=<reason>[/<days>]\nExample: @ban BadUser=Spamming/7"
+
+        player_name, reason_duration = args.split("=", 1)
+        player_name = player_name.strip()
+
+        # Parse reason/duration
+        if "/" in reason_duration:
+            reason, duration_str = reason_duration.rsplit("/", 1)
+            try:
+                duration_days = int(duration_str.strip())
+            except ValueError:
+                return "Duration must be a number (days)."
+        else:
+            reason = reason_duration
+            duration_days = None
+
+        reason = reason.strip()
+
+        # Find player to ban
+        target = await self.obj_mgr.get_object_by_name(player_name)
+        if not target or target.type != ObjectType.PLAYER:
+            return f"Player '{player_name}' not found."
+
+        # Cannot ban yourself
+        if target.id == player.id:
+            return "You cannot ban yourself."
+
+        # Cannot ban gods (unless you're god)
+        if self.obj_mgr.has_flag(target, "GOD") and not self.obj_mgr.has_flag(player, "GOD"):
+            return f"You cannot ban {target.name}."
+
+        # Issue ban
+        ban = await self.mod_mgr.ban_player(target.id, player.id, reason, duration_days)
+
+        duration_text = f" for {duration_days} days" if duration_days else " permanently"
+        return f"{target.name}(#{target.id}) has been banned{duration_text}. Reason: {reason}"
+
+    async def cmd_unban(self, player: DBObject, args: str) -> str:
+        """Unban a player"""
+        if not self.obj_mgr.has_flag(player, "WIZARD") and not self.obj_mgr.has_flag(player, "GOD"):
+            return "Permission denied."
+
+        if not args:
+            return "Usage: @unban <player>"
+
+        target = await self.obj_mgr.get_object_by_name(args.strip())
+        if not target or target.type != ObjectType.PLAYER:
+            return f"Player '{args}' not found."
+
+        if await self.mod_mgr.unban_player(target.id):
+            return f"{target.name}(#{target.id}) has been unbanned."
+        else:
+            return f"{target.name} is not banned."
+
+    async def cmd_kick(self, player: DBObject, args: str) -> str:
+        """Kick a player (disconnect)"""
+        if not self.obj_mgr.has_flag(player, "WIZARD") and not self.obj_mgr.has_flag(player, "GOD"):
+            return "Permission denied."
+
+        if not args:
+            return "Usage: @kick <player>[=<reason>]"
+
+        if "=" in args:
+            player_name, reason = args.split("=", 1)
+        else:
+            player_name = args
+            reason = "No reason specified"
+
+        target = await self.obj_mgr.get_object_by_name(player_name.strip())
+        if not target or target.type != ObjectType.PLAYER:
+            return f"Player '{player_name}' not found."
+
+        if not target.is_connected:
+            return f"{target.name} is not connected."
+
+        # TODO: Actually disconnect the player via WebSocket manager
+        return f"{target.name}(#{target.id}) kicked. Reason: {reason}"
+
+    async def cmd_muzzle(self, player: DBObject, args: str) -> str:
+        """Muzzle a player (prevent communication)"""
+        if not self.obj_mgr.has_flag(player, "WIZARD") and not self.obj_mgr.has_flag(player, "GOD"):
+            return "Permission denied."
+
+        if not args:
+            return "Usage: @muzzle <player>"
+
+        target = await self.obj_mgr.get_object_by_name(args.strip())
+        if not target or target.type != ObjectType.PLAYER:
+            return f"Player '{args}' not found."
+
+        self.obj_mgr.add_flag(target, "MUZZLED")
+        await self.session.commit()
+
+        return f"{target.name}(#{target.id}) has been muzzled. They cannot use chat or channels."
+
+    async def cmd_unmuzzle(self, player: DBObject, args: str) -> str:
+        """Unmuzzle a player"""
+        if not self.obj_mgr.has_flag(player, "WIZARD") and not self.obj_mgr.has_flag(player, "GOD"):
+            return "Permission denied."
+
+        if not args:
+            return "Usage: @unmuzzle <player>"
+
+        target = await self.obj_mgr.get_object_by_name(args.strip())
+        if not target or target.type != ObjectType.PLAYER:
+            return f"Player '{args}' not found."
+
+        self.obj_mgr.remove_flag(target, "MUZZLED")
+        await self.session.commit()
+
+        return f"{target.name}(#{target.id}) has been unmuzzled."
+
+    async def cmd_ban_list(self, player: DBObject, args: str) -> str:
+        """List active bans"""
+        if not self.obj_mgr.has_flag(player, "WIZARD") and not self.obj_mgr.has_flag(player, "GOD"):
+            return "Permission denied."
+
+        return await self.mod_mgr.format_ban_list()
+
+    # ==================== QUEST COMMANDS ====================
+
+    async def cmd_quest_list(self, player: DBObject, args: str) -> str:
+        """List available quests"""
+        return await self.quest_mgr.format_quest_list()
+
+    async def cmd_quest_start(self, player: DBObject, args: str) -> str:
+        """Start a quest"""
+        if not args:
+            return "Usage: quest/start <quest name or ID>"
+
+        # Try to find quest by name or ID
+        quest = await self.quest_mgr.get_quest_by_name(args)
+        if not quest:
+            try:
+                quest_id = int(args.strip())
+                quest = await self.quest_mgr.get_quest(quest_id)
+            except ValueError:
+                pass
+
+        if not quest:
+            return f"Quest '{args}' not found. Use 'quest/list' to see available quests."
+
+        # Start quest
+        progress = await self.quest_mgr.start_quest(quest.id, player.id)
+        return f"Quest started: {quest.name}\nUse 'quest/progress' to track your progress."
+
+    async def cmd_quest_progress(self, player: DBObject, args: str) -> str:
+        """Show quest progress"""
+        return await self.quest_mgr.format_player_quests(player.id)
+
+    async def cmd_quest_log(self, player: DBObject, args: str) -> str:
+        """Show quest log (alias for quest/progress)"""
+        return await self.quest_mgr.format_player_quests(player.id)
+
+    async def cmd_quest_create(self, player: DBObject, args: str) -> str:
+        """Create a new quest"""
+        if not self.obj_mgr.has_flag(player, "WIZARD") and not self.obj_mgr.has_flag(player, "GOD"):
+            return "Permission denied. Only wizards can create quests."
+
+        if "=" not in args:
+            return "Usage: @quest/create <name>=<description>[/<reward>]"
+
+        name, rest = args.split("=", 1)
+        name = name.strip()
+
+        # Parse description/reward
+        if "/" in rest:
+            description, reward_str = rest.rsplit("/", 1)
+            try:
+                reward_credits = int(reward_str.strip())
+            except ValueError:
+                reward_credits = 0
+        else:
+            description = rest
+            reward_credits = 0
+
+        description = description.strip()
+
+        # Create quest
+        quest = await self.quest_mgr.create_quest(name, description, player.id, reward_credits)
+        return f"Quest created: {quest.name} (ID: {quest.id})\nUse '@quest/addstep' to add steps."
+
+    async def cmd_quest_addstep(self, player: DBObject, args: str) -> str:
+        """Add a step to a quest"""
+        if not self.obj_mgr.has_flag(player, "WIZARD") and not self.obj_mgr.has_flag(player, "GOD"):
+            return "Permission denied."
+
+        if "=" not in args:
+            return "Usage: @quest/addstep <quest>=<step number>/<description>"
+
+        quest_name, step_spec = args.split("=", 1)
+        quest_name = quest_name.strip()
+
+        if "/" not in step_spec:
+            return "Usage: @quest/addstep <quest>=<step number>/<description>"
+
+        step_num_str, description = step_spec.split("/", 1)
+        try:
+            step_number = int(step_num_str.strip())
+        except ValueError:
+            return "Step number must be a number."
+
+        description = description.strip()
+
+        # Find quest
+        quest = await self.quest_mgr.get_quest_by_name(quest_name)
+        if not quest:
+            return f"Quest '{quest_name}' not found."
+
+        # Add step
+        step = await self.quest_mgr.add_quest_step(quest.id, step_number, description)
+        return f"Step {step_number} added to quest '{quest.name}'"
+
+    # ==================== ECONOMY COMMANDS ====================
+
+    async def cmd_balance(self, player: DBObject, args: str) -> str:
+        """Show credit balance"""
+        balance = await self.economy_mgr.get_balance(player.id)
+        return f"Your balance: {balance} credits"
+
+    async def cmd_give(self, player: DBObject, args: str) -> str:
+        """Give credits to another player"""
+        if "=" not in args:
+            return "Usage: give <player>=<amount>\nExample: give Alice=100"
+
+        recipient_name, amount_str = args.split("=", 1)
+        recipient_name = recipient_name.strip()
+
+        try:
+            amount = int(amount_str.strip())
+        except ValueError:
+            return "Amount must be a number."
+
+        if amount <= 0:
+            return "Amount must be positive."
+
+        # Find recipient
+        recipient = await self.obj_mgr.get_object_by_name(recipient_name)
+        if not recipient or recipient.type != ObjectType.PLAYER:
+            return f"Player '{recipient_name}' not found."
+
+        if recipient.id == player.id:
+            return "You cannot give credits to yourself."
+
+        # Transfer
+        success, message = await self.economy_mgr.transfer_credits(
+            player.id,
+            recipient.id,
+            amount,
+            f"Gift to {recipient.name}"
+        )
+
+        if success:
+            return f"You gave {amount} credits to {recipient.name}. {message}"
+        else:
+            return message
+
+    async def cmd_transactions(self, player: DBObject, args: str) -> str:
+        """Show transaction history"""
+        return await self.economy_mgr.format_transaction_history(player.id)
+
+    async def cmd_economy_grant(self, player: DBObject, args: str) -> str:
+        """Grant credits to a player (admin only)"""
+        if not self.obj_mgr.has_flag(player, "WIZARD") and not self.obj_mgr.has_flag(player, "GOD"):
+            return "Permission denied."
+
+        if "=" not in args:
+            return "Usage: @economy/grant <player>=<amount>"
+
+        player_name, amount_str = args.split("=", 1)
+        player_name = player_name.strip()
+
+        try:
+            amount = int(amount_str.strip())
+        except ValueError:
+            return "Amount must be a number."
+
+        # Find player
+        target = await self.obj_mgr.get_object_by_name(player_name)
+        if not target or target.type != ObjectType.PLAYER:
+            return f"Player '{player_name}' not found."
+
+        # Grant credits
+        new_balance = await self.economy_mgr.add_credits(
+            target.id,
+            amount,
+            "admin_grant",
+            f"Granted by {player.name}"
+        )
+
+        return f"Granted {amount} credits to {target.name}. New balance: {new_balance} credits."
+
+    async def cmd_economy_stats(self, player: DBObject, args: str) -> str:
+        """Show economy statistics"""
+        richest = await self.economy_mgr.get_richest_players(10)
+
+        output = ["=== Economy Statistics ==="]
+        output.append("\nRichest Players:")
+        output.append(f"{'Rank':<6} {'Player':<20} {'Credits':<15}")
+        output.append("-" * 45)
+
+        for idx, (player_obj, balance) in enumerate(richest, 1):
+            output.append(f"{idx:<6} {player_obj.name:<20} {balance:<15}")
 
         return "\n".join(output)

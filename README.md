@@ -37,11 +37,17 @@ A modern, web-based MUSH (Multi-User Shared Hallucination) server inspired by th
 - **Quick Commands**: One-click access to common commands
 - **Responsive Design**: Works on desktop, tablet, and mobile
 
-### Security Features
+### Security Features 🔒 **NEW: Production-Ready!**
 - **Password Hashing**: Bcrypt-based secure password storage
 - **WebSocket Authentication**: Secure authentication before allowing commands
 - **Permission System**: God, Wizard, Royal, and user-level permissions
-- **Input Validation**: Prevents command injection and XSS
+- **Rate Limiting**: Prevents brute force, DoS, and spam attacks
+- **Input Validation**: Validates all user input, prevents command injection
+- **XSS Protection**: Sanitizes output, escapes dangerous content
+- **AI Prompt Injection Protection**: Detects and blocks jailbreak attempts
+- **Session Timeout**: Enforces idle timeout on connections
+- **Security Logging**: Tracks failed logins, suspicious activity, admin actions
+- **CSRF Protection Ready**: Framework in place for CSRF tokens
 
 ### NEW: Channel System 📢
 - **Group Communication**: Create and join channels for organized chat
@@ -81,6 +87,61 @@ A modern, web-based MUSH (Multi-User Shared Hallucination) server inspired by th
 - **Visual Enhancements**: Better formatting and organization
 - **Room Map Integration**: See your location visually
 - **Channel Messages**: Formatted with colors and sender information
+
+### NEW: Advanced Lock System 🔐
+- **Complex Access Control**: Powerful lock expressions with AND, OR, NOT operators
+- **Multiple Lock Types**: use, enter, get, teleport, and more
+- **Attribute-Based Locks**: Lock based on player stats (`HP:>50`)
+- **Flag-Based Locks**: Require specific flags (`WIZARD|ROYAL`)
+- **Lock Commands**: `@lock`, `@unlock`, `@lock/list`
+- **Examples**: `@lock/use sword=#123|WIZARD`, `@lock/enter door=HP:>50&QUEST_COMPLETE:1`
+
+### NEW: Mail System 📬
+- **Async Messaging**: Send mail to offline players
+- **Subject Lines**: Organize messages with subjects
+- **Inbox Management**: List, read, and delete mail
+- **Mail Commands**: `@mail`, `@mail/list`, `@mail/read`, `@mail/delete`
+- **Full Implementation**: Complete mail system ready to use
+
+### NEW: Page System 📟
+- **Direct Messages**: Real-time pages to online players
+- **Page History**: View recent pages sent and received
+- **Commands**: `page <player>=<message>`, `page/list`
+- **Online Check**: Suggests mail if recipient is offline
+
+### NEW: Moderation Tools 👮
+- **Ban System**: Ban players permanently or temporarily
+- **Kick Command**: Disconnect disruptive players
+- **Muzzle System**: Prevent players from using chat
+- **Ban Management**: `@ban`, `@unban`, `@ban/list`
+- **Permission Checks**: Only wizards and admins can moderate
+- **Audit Trail**: All moderation actions logged
+
+### NEW: Quest System 🎯
+- **Structured Quests**: Create quests with multiple steps
+- **Progress Tracking**: Track player progress on quests
+- **Rewards**: Grant credits upon quest completion
+- **Repeatable Quests**: Quests can be repeated
+- **Quest Commands**: `quest/list`, `quest/start`, `quest/progress`, `@quest/create`
+- **Quest Creation**: Wizards can create quests with `@quest/create`
+
+### NEW: Economy System 💰
+- **Currency System**: Players earn and spend credits
+- **Transfer Credits**: Give credits to other players
+- **Transaction History**: Track all economic activity
+- **Admin Controls**: Grant credits with `@economy/grant`
+- **Leaderboard**: See richest players with `@economy/stats`
+- **Quest Rewards**: Quests automatically grant credits
+- **Economy Commands**: `balance`, `give`, `transactions`
+
+### NEW: Admin Dashboard 🛡️
+- **Web Interface**: Access at `/admin`
+- **Real-time Stats**: Server statistics, online players, active bans
+- **Quick Actions**: Broadcast messages, create quests, grant credits
+- **Economy Overview**: Richest players, transaction volume
+- **Quest Management**: View active quests
+- **AI Status**: Check AI backend configuration
+- **Auto-refresh**: Dashboard updates every 30 seconds
 
 ## Installation
 
@@ -329,6 +390,158 @@ guide What should I do here?
 ```
 
 **Note**: AI features require Ollama or MLX. See [AI_SETUP.md](AI_SETUP.md) for installation.
+
+### Using the Lock System
+
+```bash
+# Lock an object so only specific players can use it
+@lock sword/use=#123|WIZARD
+# Only player #123 OR wizards can use the sword
+
+# Lock a door with attribute requirement
+@lock door/enter=HP:>50&QUEST_COMPLETE:1
+# Need HP>50 AND QUEST_COMPLETE:1 to enter
+
+# Complex lock with grouping
+@lock treasure/get=!THIEF&(WIZARD|ROYAL)
+# Can get if NOT a thief AND (wizard OR royal)
+
+# Remove a lock
+@unlock sword/use
+
+# List all locks on an object
+@lock/list sword
+```
+
+### Using the Mail System
+
+```bash
+# Send mail to a player
+@mail Alice=Meeting Tonight/Let's meet in Central Plaza at 8pm
+
+# List your inbox
+@mail/list
+# Shows all mail with ID, sender, subject, date, status
+
+# Read a message
+@mail/read 1
+# Displays full message
+
+# Delete mail
+@mail/delete 1
+```
+
+### Using the Page System
+
+```bash
+# Send a page (direct message) to online player
+page Bob=Are you available to help with the quest?
+# You paged Bob: Are you available to help with the quest?
+
+# View recent pages
+page/list
+# Shows last 10 pages sent and received
+```
+
+### Using Moderation Tools
+
+```bash
+# Ban a player for 7 days
+@ban Spammer=Flooding chat with spam/7
+# Spammer(#42) has been banned for 7 days. Reason: Flooding chat with spam
+
+# Permanent ban
+@ban TrollUser=Harassment and abuse
+# TrollUser(#43) has been banned permanently.
+
+# Unban a player
+@unban Spammer
+# Spammer(#42) has been unbanned.
+
+# Muzzle a player (prevent chat)
+@muzzle Annoying=Temporary mute for spam
+# Annoying(#44) has been muzzled.
+
+# Unmuzzle
+@unmuzzle Annoying
+
+# Kick a player (disconnect)
+@kick IdleUser=Freeing up connection slot
+
+# List active bans
+@ban/list
+```
+
+### Using the Quest System
+
+```bash
+# List available quests
+quest/list
+# === Available Quests ===
+# Find the Crystals (ID: 1)
+#   Retrieve the three ancient crystals scattered across the realm
+#   Reward: 1000 credits
+
+# Start a quest
+quest/start Find the Crystals
+# Quest started: Find the Crystals
+# Use 'quest/progress' to track your progress.
+
+# Check your progress
+quest/progress
+# === Your Quests ===
+# Active:
+#   Find the Crystals - Step 1
+
+# Create a quest (wizards only)
+@quest/create Rescue the Princess=Save the princess from the dragon/500
+# Quest created: Rescue the Princess (ID: 2)
+
+# Add steps to quest
+@quest/addstep Rescue the Princess=1/Travel to the Dragon's Lair
+@quest/addstep Rescue the Princess=2/Defeat the dragon
+@quest/addstep Rescue the Princess=3/Escort the princess to safety
+```
+
+### Using the Economy System
+
+```bash
+# Check your balance
+balance
+# Your balance: 500 credits
+
+# Give credits to another player
+give Alice=100
+# You gave 100 credits to Alice. Your new balance: 400 credits
+
+# View transaction history
+transactions
+# === Transaction History ===
+# Shows recent transactions
+
+# Grant credits (admin only)
+@economy/grant Bob=1000
+# Granted 1000 credits to Bob. New balance: 1000 credits
+
+# View richest players
+@economy/stats
+# === Economy Statistics ===
+# Richest Players:
+# 1      Alice     5000
+# 2      Bob       3500
+```
+
+### Accessing the Admin Dashboard
+
+Open your browser to: `http://localhost:8000/admin`
+
+Features:
+- Real-time server statistics
+- Online player list
+- Active ban management
+- Economy leaderboard
+- Quest overview
+- Quick action buttons
 
 ### Viewing the Room Map
 

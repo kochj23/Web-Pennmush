@@ -249,3 +249,144 @@ class NPC(Base):
 
     def __repr__(self):
         return f"<NPC(id={self.id}, object_id={self.object_id})>"
+
+
+class Quest(Base):
+    """
+    Quest system for structured gameplay.
+    """
+    __tablename__ = "quests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), unique=True, nullable=False, index=True)
+    description = Column(Text, nullable=False)
+    creator_id = Column(Integer, ForeignKey("objects.id"), nullable=False)
+    reward_credits = Column(Integer, default=0)
+    reward_items = Column(Text, nullable=True)  # JSON array of item IDs
+    is_repeatable = Column(Boolean, default=False)
+    min_level = Column(Integer, default=0)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # Relationships
+    creator = relationship("DBObject", backref="created_quests")
+
+    def __repr__(self):
+        return f"<Quest(id={self.id}, name='{self.name}')>"
+
+
+class QuestStep(Base):
+    """Individual steps in a quest"""
+    __tablename__ = "quest_steps"
+
+    id = Column(Integer, primary_key=True, index=True)
+    quest_id = Column(Integer, ForeignKey("quests.id"), nullable=False, index=True)
+    step_number = Column(Integer, nullable=False)
+    description = Column(Text, nullable=False)
+    required_object_id = Column(Integer, ForeignKey("objects.id"), nullable=True)
+    required_location_id = Column(Integer, ForeignKey("objects.id"), nullable=True)
+    required_action = Column(String(100), nullable=True)  # Command to complete step
+    completion_text = Column(Text, nullable=True)
+
+    # Relationships
+    quest = relationship("Quest", backref="steps")
+
+    def __repr__(self):
+        return f"<QuestStep(id={self.id}, quest_id={self.quest_id}, step={self.step_number})>"
+
+
+class QuestProgress(Base):
+    """Tracks player progress on quests"""
+    __tablename__ = "quest_progress"
+
+    id = Column(Integer, primary_key=True, index=True)
+    quest_id = Column(Integer, ForeignKey("quests.id"), nullable=False, index=True)
+    player_id = Column(Integer, ForeignKey("objects.id"), nullable=False, index=True)
+    current_step = Column(Integer, default=0)
+    is_completed = Column(Boolean, default=False)
+    started_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+    times_completed = Column(Integer, default=0)
+
+    # Relationships
+    quest = relationship("Quest")
+    player = relationship("DBObject", backref="quest_progress")
+
+    def __repr__(self):
+        return f"<QuestProgress(quest_id={self.quest_id}, player_id={self.player_id}, step={self.current_step})>"
+
+
+class PlayerCurrency(Base):
+    """Player currency balances"""
+    __tablename__ = "player_currency"
+
+    id = Column(Integer, primary_key=True, index=True)
+    player_id = Column(Integer, ForeignKey("objects.id"), nullable=False, unique=True, index=True)
+    credits = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    modified_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    # Relationships
+    player = relationship("DBObject", backref="currency")
+
+    def __repr__(self):
+        return f"<PlayerCurrency(player_id={self.player_id}, credits={self.credits})>"
+
+
+class Transaction(Base):
+    """Economic transaction log"""
+    __tablename__ = "transactions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    from_player_id = Column(Integer, ForeignKey("objects.id"), nullable=True, index=True)
+    to_player_id = Column(Integer, ForeignKey("objects.id"), nullable=True, index=True)
+    amount = Column(Integer, nullable=False)
+    transaction_type = Column(String(50), nullable=False)  # give, quest_reward, shop_buy, etc.
+    description = Column(String(255), nullable=True)
+    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # Relationships
+    from_player = relationship("DBObject", foreign_keys=[from_player_id], backref="transactions_sent")
+    to_player = relationship("DBObject", foreign_keys=[to_player_id], backref="transactions_received")
+
+    def __repr__(self):
+        return f"<Transaction(id={self.id}, amount={self.amount}, type={self.transaction_type})>"
+
+
+class BanRecord(Base):
+    """Player ban records for moderation"""
+    __tablename__ = "ban_records"
+
+    id = Column(Integer, primary_key=True, index=True)
+    player_id = Column(Integer, ForeignKey("objects.id"), nullable=False, index=True)
+    banned_by_id = Column(Integer, ForeignKey("objects.id"), nullable=False)
+    reason = Column(Text, nullable=False)
+    banned_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    expires_at = Column(DateTime, nullable=True)  # NULL = permanent ban
+    is_active = Column(Boolean, default=True)
+
+    # Relationships
+    player = relationship("DBObject", foreign_keys=[player_id], backref="ban_records")
+    banned_by = relationship("DBObject", foreign_keys=[banned_by_id], backref="bans_issued")
+
+    def __repr__(self):
+        return f"<BanRecord(id={self.id}, player_id={self.player_id}, active={self.is_active})>"
+
+
+class Page(Base):
+    """Direct message system (pages)"""
+    __tablename__ = "pages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    from_player_id = Column(Integer, ForeignKey("objects.id"), nullable=False, index=True)
+    to_player_id = Column(Integer, ForeignKey("objects.id"), nullable=False, index=True)
+    message = Column(Text, nullable=False)
+    sent_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    is_read = Column(Boolean, default=False)
+
+    # Relationships
+    from_player = relationship("DBObject", foreign_keys=[from_player_id], backref="pages_sent")
+    to_player = relationship("DBObject", foreign_keys=[to_player_id], backref="pages_received")
+
+    def __repr__(self):
+        return f"<Page(id={self.id}, from={self.from_player_id}, to={self.to_player_id})>"
