@@ -17,3 +17,8 @@ python-dotenv==1.0.0
 # Utilities
 pydantic==2.5.3
 pydantic-settings==2.1.0
+
+# Local AI Integration
+ollama>=0.1.6
+mlx-lm>=0.0.10  # For Apple Silicon (M1/M2/M3)
+httpx>=0.25.0  # For async HTTP requests to Ollama

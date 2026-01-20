@@ -11,6 +11,7 @@ from backend.engine.objects import ObjectManager
 from backend.engine.channels import ChannelManager, HelpManager
 from datetime import datetime
 import re
+import json
 
 
 class CommandParser:
@@ -68,6 +69,10 @@ class CommandParser:
         self.register_command("@npc/knowledge", self.cmd_npc_knowledge)
         self.register_command("talk", self.cmd_talk)
         self.register_command("ask", self.cmd_ask)
+
+        # AI commands
+        self.register_command("guide", self.cmd_guide, ["ai"])
+        self.register_command("@ai/status", self.cmd_ai_status)
 
     def register_command(self, name: str, handler: Callable, aliases: list = None):
         """Register a command with optional aliases"""
@@ -715,9 +720,39 @@ class CommandParser:
         if not npc or not npc.is_active:
             return f"{npc_obj.name} is not an NPC or is not active."
 
-        # Generate AI response (placeholder - would integrate with OpenAI/Anthropic API)
-        # For now, return a simple response
-        response = f"{npc_obj.name} says, \"I heard you say: {message}. AI integration is not yet configured.\""
+        # Generate AI response using local AI (Ollama or MLX)
+        from backend.engine.ai_manager import ai_manager
+
+        # Parse conversation history
+        conversation_history = []
+        if npc.conversation_history:
+            try:
+                conversation_history = json.loads(npc.conversation_history)
+            except:
+                conversation_history = []
+
+        # Generate response
+        ai_response = await ai_manager.generate_response(
+            prompt=message,
+            personality=npc.personality,
+            knowledge_base=npc.knowledge_base or "",
+            model=npc.ai_model,
+            temperature=npc.temperature / 10.0,  # Convert from 0-10 to 0.0-1.0
+            max_tokens=npc.max_tokens,
+            conversation_history=conversation_history
+        )
+
+        # Update conversation history (keep last 10 exchanges)
+        conversation_history.append({"role": "user", "content": message})
+        conversation_history.append({"role": "assistant", "content": ai_response})
+        if len(conversation_history) > 20:  # 10 exchanges = 20 messages
+            conversation_history = conversation_history[-20:]
+
+        npc.conversation_history = json.dumps(conversation_history)
+        await self.session.commit()
+
+        # Format response
+        response = f'{npc_obj.name} says, "{ai_response}"'
 
         return response
 
@@ -735,3 +770,86 @@ class CommandParser:
             # "ask npc=question" format
             npc_name, question = args.split("=", 1)
             return await self.cmd_talk(player, f"to {npc_name.strip()}={question.strip()}")
+
+    # ==================== AI GUIDE COMMANDS ====================
+
+    async def cmd_guide(self, player: DBObject, args: str) -> str:
+        """
+        AI-powered game guide.
+        Ask questions and get helpful answers from the AI.
+        """
+        if not args:
+            return """=== AI Game Guide ===
+
+The AI guide can help you learn the game and answer questions.
+
+Usage: guide <your question>
+
+Examples:
+  guide How do I create a room?
+  guide What commands are available?
+  guide How do I talk to other players?
+  guide What is softcode?
+
+Aliases: ai
+
+The guide uses local AI (Ollama or MLX) if available.
+            """
+
+        from backend.engine.ai_manager import ai_manager
+
+        if not ai_manager.is_available():
+            return """AI Guide is not available. Please install a local AI backend:
+
+Option 1 - Ollama (All platforms):
+  1. Install from https://ollama.ai
+  2. Run: ollama pull llama2
+  3. Restart Web-Pennmush
+
+Option 2 - MLX (Apple Silicon only):
+  1. pip install mlx-lm
+  2. Restart Web-Pennmush
+
+Then try 'guide' again!"""
+
+        # Build game context
+        room = await self.obj_mgr.get_object(player.location_id)
+        inventory = await self.obj_mgr.get_contents(player.id)
+
+        game_context = {
+            "location": room.name if room else "unknown",
+            "inventory": [obj.name for obj in inventory] if inventory else []
+        }
+
+        # Get AI response
+        response = await ai_manager.get_game_guidance(args, game_context)
+
+        return f"=== AI Guide ===\n\n{response}\n\nNeed more help? Try 'help' for command documentation."
+
+    async def cmd_ai_status(self, player: DBObject, args: str) -> str:
+        """Show AI backend status"""
+        from backend.engine.ai_manager import ai_manager
+
+        status = ai_manager.get_status()
+
+        output = ["=== AI Backend Status ==="]
+        output.append(f"Active Backend: {status['backend']}")
+        output.append(f"Ollama Available: {'✓ Yes' if status['ollama_available'] else '✗ No'}")
+        output.append(f"MLX Available: {'✓ Yes' if status['mlx_available'] else '✗ No (Apple Silicon only)'}")
+        output.append(f"Configured: {'✓ Yes' if status['is_configured'] else '✗ No'}")
+
+        if status['is_configured']:
+            # List available models
+            models = await ai_manager.list_available_models()
+            if models:
+                output.append(f"\nAvailable Models:")
+                for model in models[:5]:  # Show first 5
+                    output.append(f"  - {model}")
+                if len(models) > 5:
+                    output.append(f"  ... and {len(models) - 5} more")
+        else:
+            output.append("\nTo enable AI:")
+            output.append("  Option 1: Install Ollama from https://ollama.ai")
+            output.append("  Option 2: pip install mlx-lm (Apple Silicon only)")
+
+        return "\n".join(output)

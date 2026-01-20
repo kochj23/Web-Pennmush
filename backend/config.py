@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     MAX_OUTPUT_LENGTH: int = 16384
     IDLE_TIMEOUT_MINUTES: int = 30
 
+    # AI Settings
+    AI_BACKEND: str = "auto"  # auto, ollama, mlx, none
+    AI_DEFAULT_MODEL: str = "llama2"  # Default model for NPCs and guides
+    OLLAMA_BASE_URL: str = "http://localhost:11434"  # Ollama server URL
+    AI_ENABLE_GAME_GUIDE: bool = True  # Enable AI-powered game guide
+
     class Config:
         env_file = ".env"
         case_sensitive = True

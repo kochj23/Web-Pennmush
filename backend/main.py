@@ -26,8 +26,22 @@ async def lifespan(app: FastAPI):
     print(f"Initializing database...")
     await init_db()
     print(f"Database initialized successfully!")
-    print(f"Server running at http://{settings.HOST}:{settings.PORT}")
+
+    # Initialize AI
+    print(f"\nInitializing AI backends...")
+    from backend.engine.ai_manager import ai_manager
+    status = ai_manager.get_status()
+    print(f"AI Backend: {status['backend']}")
+    if status['is_configured']:
+        print(f"✓ AI is ready! NPCs and game guide are functional.")
+    else:
+        print(f"⚠ No AI backend detected. NPCs will use placeholder responses.")
+        print(f"  Install Ollama: https://ollama.ai")
+        print(f"  Or MLX (Apple Silicon): pip install mlx-lm")
+
+    print(f"\nServer running at http://{settings.HOST}:{settings.PORT}")
     print(f"WebSocket endpoint: ws://{settings.HOST}:{settings.PORT}/ws")
+    print(f"\nNew commands: 'guide <question>' and '@ai/status'")
     yield
     # Shutdown
     print("Shutting down...")

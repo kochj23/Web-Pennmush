@@ -65,12 +65,15 @@ A modern, web-based MUSH (Multi-User Shared Hallucination) server inspired by th
 - **Customizable Radius**: Adjust how many rooms to display
 
 ### NEW: AI-Powered NPCs 🤖
-- **Intelligent Characters**: Create NPCs that respond using AI
+- **Local AI Integration**: Uses Ollama or MLX (no cloud APIs needed!)
+- **Intelligent Characters**: NPCs respond with context-aware conversations
 - **Personality System**: Define unique personalities for each NPC
 - **Knowledge Base**: Give NPCs specific information to share
 - **Natural Conversations**: Talk to NPCs using natural language
+- **Conversation Memory**: NPCs remember your previous messages
 - **Easy Configuration**: Set personality and knowledge with simple commands
-- **Note**: Requires AI API configuration (placeholder implementation included)
+- **Game Guide**: AI-powered help system answers player questions
+- **Multiple Backends**: Supports Ollama (all platforms) and MLX (Apple Silicon)
 
 ### NEW: Rich Text Features ✨
 - **Structured Output**: Commands return formatted data for better display
@@ -111,6 +114,35 @@ A modern, web-based MUSH (Multi-User Shared Hallucination) server inspired by th
      - Username: `One`
      - Password: `potrzebie`
    - **IMPORTANT**: Change this password immediately after first login!
+
+### AI Setup (Optional but Recommended)
+
+Enable intelligent NPCs and AI game guide:
+
+**Option 1: Ollama (All platforms)**
+```bash
+# Install Ollama from https://ollama.ai
+# Then pull a model:
+ollama pull llama2
+
+# Restart Web-Pennmush
+python -m backend.main
+```
+
+**Option 2: MLX (Apple Silicon only)**
+```bash
+pip install mlx-lm
+python -m backend.main
+```
+
+**Verify AI is working:**
+```bash
+# In the game:
+@ai/status
+guide How do I create a room?
+```
+
+📖 **Full AI setup guide**: See [AI_SETUP.md](AI_SETUP.md) for detailed instructions
 
 ## Project Structure
 
@@ -260,15 +292,43 @@ help softcode
 # Give the NPC knowledge
 @npc/knowledge Sage=Knows the location of ancient artifacts and the history of the realm
 
-# Talk to the NPC
+# Talk to the NPC (AI responds intelligently!)
 talk to Sage=Where can I find the crystal?
-# Sage says, "I heard you say: Where can I find the crystal?. AI integration is not yet configured."
+# Sage says, "Seek ye the luminous stone within the cave kissed by sun's first light, where shadows dare not dwell."
+
+talk to Sage=Can you teach me magic?
+# Sage says, "Magic flows through those who seek wisdom with pure intent. Begin with simple incantations, young apprentice."
 
 # Alternative syntax
 ask Sage=What do you know about magic?
+# Sage says, "The ancient arts require patience and understanding. Each spell is a conversation with the forces of nature."
 ```
 
-**Note**: AI-powered responses require API configuration. The current implementation includes a placeholder. To enable full AI functionality, integrate with OpenAI or Anthropic's API in `backend/engine/commands.py:cmd_talk`.
+**NPCs remember your conversation!** They use local AI (Ollama or MLX) for intelligent responses.
+
+### Using the AI Game Guide
+
+```bash
+# Ask the AI guide for help
+guide How do I create a room?
+# === AI Guide ===
+# To create a new room, use the @dig command followed by the room name.
+# For example: @dig Castle Entrance
+# Then use @open to create exits connecting rooms...
+
+guide What are channels?
+# === AI Guide ===
+# Channels are group chat rooms for player communication. Join a channel
+# with 'channel/join Public' and chat with 'pub <message>'...
+
+# The guide knows your current location and inventory
+guide What should I do here?
+# === AI Guide ===
+# You're in Central Plaza. Try exploring by typing exit names like 'portal'.
+# You can also examine objects with 'look <object>'...
+```
+
+**Note**: AI features require Ollama or MLX. See [AI_SETUP.md](AI_SETUP.md) for installation.
 
 ### Viewing the Room Map
 
