@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web-Pennmush - Modern MUSH Client</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <h1>Web-Pennmush</h1>
+        <div class="header-info">
+            <span id="player-name"></span>
+            <span id="connection-status" class="status-disconnected">Disconnected</span>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <div class="container">
+        <!-- Sidebar Left - Room Info -->
+        <aside class="sidebar sidebar-left">
+            <div class="panel">
+                <h2>Current Location</h2>
+                <div id="room-info" class="room-info">
+                    <div class="room-name">Not connected</div>
+                    <div class="room-description"></div>
+                    <div class="room-exits">
+                        <strong>Exits:</strong>
+                        <div id="exits-list"></div>
+                    </div>
+                    <div class="room-contents">
+                        <strong>Here:</strong>
+                        <div id="contents-list"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h2>Quick Commands</h2>
+                <div class="quick-commands">
+                    <button onclick="sendCommand('look')">Look</button>
+                    <button onclick="sendCommand('inventory')">Inventory</button>
+                    <button onclick="sendCommand('who')">Who</button>
+                    <button onclick="sendCommand('@stats')">Stats</button>
+                    <button onclick="sendCommand('help')">Help</button>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content - Output and Input -->
+        <main class="main-content">
+            <div class="output-container">
+                <div id="output" class="output"></div>
+            </div>
+
+            <div class="input-container">
+                <input
+                    type="text"
+                    id="command-input"
+                    class="command-input"
+                    placeholder="Enter command..."
+                    autocomplete="off"
+                    disabled
+                />
+                <button id="send-button" class="send-button" disabled>Send</button>
+            </div>
+
+            <div class="input-help">
+                Press <kbd>↑</kbd>/<kbd>↓</kbd> for command history | <kbd>Tab</kbd> for autocomplete
+            </div>
+        </main>
+
+        <!-- Sidebar Right - Players Online -->
+        <aside class="sidebar sidebar-right">
+            <div class="panel">
+                <h2>Players Online</h2>
+                <div id="players-list" class="players-list">
+                    <div class="no-players">No players online</div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h2>Recent Activity</h2>
+                <div id="activity-log" class="activity-log">
+                    <div class="activity-item">Welcome to Web-Pennmush!</div>
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <!-- Login Modal -->
+    <div id="login-modal" class="modal">
+        <div class="modal-content">
+            <h2>Connect to Web-Pennmush</h2>
+
+            <div class="tabs">
+                <button class="tab-button active" onclick="showTab('login')">Login</button>
+                <button class="tab-button" onclick="showTab('register')">Register</button>
+            </div>
+
+            <!-- Login Form -->
+            <div id="login-tab" class="tab-content active">
+                <form id="login-form" onsubmit="handleLogin(event)">
+                    <div class="form-group">
+                        <label for="login-username">Username</label>
+                        <input type="text" id="login-username" required autocomplete="username">
+                    </div>
+                    <div class="form-group">
+                        <label for="login-password">Password</label>
+                        <input type="password" id="login-password" required autocomplete="current-password">
+                    </div>
+                    <button type="submit" class="btn-primary">Connect</button>
+                    <div id="login-error" class="error-message"></div>
+                </form>
+                <div class="login-help">
+                    <p><strong>First time?</strong> Use the Register tab to create an account.</p>
+                    <p><strong>Default account:</strong> Username: <code>One</code>, Password: <code>potrzebie</code></p>
+                </div>
+            </div>
+
+            <!-- Register Form -->
+            <div id="register-tab" class="tab-content">
+                <form id="register-form" onsubmit="handleRegister(event)">
+                    <div class="form-group">
+                        <label for="register-username">Username</label>
+                        <input type="text" id="register-username" required autocomplete="username">
+                    </div>
+                    <div class="form-group">
+                        <label for="register-password">Password</label>
+                        <input type="password" id="register-password" required autocomplete="new-password">
+                    </div>
+                    <div class="form-group">
+                        <label for="register-email">Email (optional)</label>
+                        <input type="email" id="register-email" autocomplete="email">
+                    </div>
+                    <button type="submit" class="btn-primary">Create Account</button>
+                    <div id="register-error" class="error-message"></div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <span>Web-Pennmush v1.0.0 by Jordan Koch</span>
+        <span>|</span>
+        <span>Inspired by PennMUSH</span>
+        <span>|</span>
+        <a href="https://github.com/kochj23/Web-Pennmush" target="_blank">GitHub</a>
+    </footer>
+
+    <!-- Scripts -->
+    <script src="/static/js/websocket.js"></script>
+    <script src="/static/js/ui.js"></script>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
