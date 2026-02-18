@@ -1,5 +1,7 @@
 # Web-Pennmush
 
+![Build](https://github.com/kochj23/Web-Pennmush/actions/workflows/build.yml/badge.svg)
+
 A modern, web-based MUSH (Multi-User Shared Hallucination) server inspired by the classic [PennMUSH](https://github.com/pennmush/pennmush). Built with Python, FastAPI, and WebSockets for real-time multiplayer text-based gaming.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
