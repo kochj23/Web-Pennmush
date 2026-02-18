@@ -1,0 +1,3 @@
+theme: jekyll-theme-cayman
+title: "Web-Pennmush"
+description: "A modern, web-based MUSH server inspired by PennMUSH. Built with Python, FastAPI, and WebSockets for real-time multiplayer text-based gaming."
