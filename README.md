@@ -722,3 +722,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 **Last Updated:** January 22, 2026
 **Status:** ✅ Production Ready
+
+---
+
+> **Disclaimer:** This is a personal project created on my own time. It is not affiliated with, endorsed by, or representative of my employer.
