@@ -72,3 +72,7 @@ htmlcov/
 Network Trash Folder
 Temporary Items
 .apdisk
+DerivedData/
+.build/
+*.xcuserstate
+xcuserdata/
