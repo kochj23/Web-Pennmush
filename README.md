@@ -43,13 +43,13 @@ A modern, web-based MUSH (Multi-User Shared Hallucination) server inspired by th
 - **Password Hashing**: Bcrypt-based secure password storage
 - **WebSocket Authentication**: Secure authentication before allowing commands
 - **Permission System**: God, Wizard, Royal, and user-level permissions
-- **Rate Limiting**: Prevents brute force, DoS, and spam attacks
+- **Rate Limiting**: Prevents brute force, DoS (Denial of Service), and spam attacks
 - **Input Validation**: Validates all user input, prevents command injection
-- **XSS Protection**: Sanitizes output, escapes dangerous content
+- **XSS (Cross-Site Scripting) Protection**: Sanitizes output, escapes dangerous content
 - **AI Prompt Injection Protection**: Detects and blocks jailbreak attempts
 - **Session Timeout**: Enforces idle timeout on connections
 - **Security Logging**: Tracks failed logins, suspicious activity, admin actions
-- **CSRF Protection Ready**: Framework in place for CSRF tokens
+- **CSRF (Cross-Site Request Forgery) Protection Ready**: Framework in place for CSRF tokens
 
 ### NEW: Channel System 📢
 - **Group Communication**: Create and join channels for organized chat
@@ -60,7 +60,7 @@ A modern, web-based MUSH (Multi-User Shared Hallucination) server inspired by th
 
 ### NEW: Comprehensive Help System 📚
 - **In-Game Documentation**: Searchable help topics covering all commands
-- **Category Organization**: Commands, building, softcode, NPCs, and more
+- **Category Organization**: Commands, building, softcode, NPCs (Non-Player Characters), and more
 - **Context-Sensitive**: Related topics suggested for each help entry
 - **Alias Support**: Find help by command aliases
 - **Examples Included**: Every help topic includes usage examples
@@ -73,7 +73,7 @@ A modern, web-based MUSH (Multi-User Shared Hallucination) server inspired by th
 - **Customizable Radius**: Adjust how many rooms to display
 
 ### NEW: AI-Powered NPCs 🤖
-- **Local AI Integration**: Uses Ollama or MLX (no cloud APIs needed!)
+- **Local AI Integration**: Uses Ollama or MLX (Machine Learning eXtensions) (no cloud APIs needed!)
 - **Intelligent Characters**: NPCs respond with context-aware conversations
 - **Personality System**: Define unique personalities for each NPC
 - **Knowledge Base**: Give NPCs specific information to share
@@ -656,7 +656,7 @@ self.register_function("myfunction", self.func_myfunction)
 1. Change the secret key in `config.py` or set `SECRET_KEY` environment variable
 2. Change the default admin password
 3. Use a production database (PostgreSQL recommended)
-4. Enable HTTPS/WSS
+4. Enable HTTPS/WSS (WebSocket Secure)
 5. Set `DEBUG=False`
 
 ### Using PostgreSQL
@@ -693,7 +693,7 @@ Contributions are welcome! Please feel free to submit pull requests.
 - [ ] More softcode functions (list operations, regex, etc.)
 - [ ] Mobile app (React Native)
 - [ ] Map visualization
-- [ ] Rich text formatting (ANSI colors, markdown)
+- [ ] Rich text formatting (ANSI (American National Standards Institute) colors, markdown)
 - [ ] Voice integration
 - [ ] AI-powered NPCs
 
