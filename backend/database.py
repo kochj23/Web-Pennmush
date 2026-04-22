@@ -103,8 +103,7 @@ async def init_db():
                     "more commands.'"
                 ),
                 flags="VISIBLE",
-                created_at=datetime.utcnow(),
-                owner_id=1
+                created_at=datetime.utcnow()
             )
             session.add(central_plaza)
 
