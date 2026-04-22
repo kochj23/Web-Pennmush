@@ -35,8 +35,7 @@ class ConnectionManager:
         self.last_activity: Dict[int, datetime] = {}
 
     async def connect(self, websocket: WebSocket, player_id: int):
-        """Register a new connection"""
-        await websocket.accept()
+        """Register a new connection (websocket must already be accepted)"""
         self.active_connections[player_id] = websocket
         self.session_map[websocket] = player_id
 
