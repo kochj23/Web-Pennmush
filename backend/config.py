@@ -33,8 +33,8 @@ class Settings(BaseSettings):
 
     # AI Settings
     AI_BACKEND: str = "auto"  # auto, ollama, mlx, none
-    AI_DEFAULT_MODEL: str = "llama2"  # Default model for NPCs and guides
-    OLLAMA_BASE_URL: str = "http://localhost:11434"  # Ollama server URL
+    AI_DEFAULT_MODEL: str = "nova:latest"  # Default model for NPCs and guides
+    OLLAMA_BASE_URL: str = "http://127.0.0.1:11434"  # Ollama server URL
     AI_ENABLE_GAME_GUIDE: bool = True  # Enable AI-powered game guide
 
     class Config:

@@ -28,7 +28,9 @@ class AIManager:
         self.backend = AIBackend.NONE
         self.ollama_available = False
         self.mlx_available = False
-        self.ollama_base_url = "http://localhost:11434"
+        from backend.config import settings
+        self.ollama_base_url = settings.OLLAMA_BASE_URL
+        self.default_model = settings.AI_DEFAULT_MODEL
         self._detect_backends()
 
     def _detect_backends(self):
@@ -66,7 +68,7 @@ class AIManager:
         prompt: str,
         personality: str = "helpful assistant",
         knowledge_base: str = "",
-        model: str = "llama2",
+        model: str = None,
         temperature: float = 0.7,
         max_tokens: int = 150,
         conversation_history: Optional[List[Dict[str, str]]] = None
@@ -86,6 +88,7 @@ class AIManager:
         Returns:
             Generated response text
         """
+        model = model or self.default_model
         if self.backend == AIBackend.OLLAMA:
             return await self._generate_ollama(
                 prompt, personality, knowledge_base, model,
@@ -111,7 +114,8 @@ class AIManager:
     ) -> str:
         """Generate response using Ollama"""
         try:
-            import ollama
+            from ollama import Client
+            client = Client(host=self.ollama_base_url)
 
             # Build system message
             system_message = f"You are {personality}."
@@ -134,7 +138,7 @@ class AIManager:
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
                 None,
-                lambda: ollama.chat(
+                lambda: client.chat(
                     model=model,
                     messages=messages,
                     options={
@@ -216,7 +220,7 @@ class AIManager:
         self,
         player_query: str,
         game_context: Dict[str, Any],
-        model: str = "llama2"
+        model: str = None
     ) -> str:
         """
         Provide AI-powered game guidance to players.
@@ -241,15 +245,17 @@ Player question: {player_query}
 
 Provide a brief, helpful response (2-3 sentences). If it's about commands, explain what they do. If it's about the game world, be creative but helpful."""
 
+        model = model or self.default_model
         messages = [{"role": "user", "content": context}]
 
         try:
             if self.backend == AIBackend.OLLAMA:
-                import ollama
+                from ollama import Client
+                client = Client(host=self.ollama_base_url)
                 loop = asyncio.get_event_loop()
                 response = await loop.run_in_executor(
                     None,
-                    lambda: ollama.chat(
+                    lambda: client.chat(
                         model=model,
                         messages=messages,
                         options={"temperature": 0.7, "num_predict": 150}
@@ -279,13 +285,14 @@ Provide a brief, helpful response (2-3 sentences). If it's about commands, expla
         """List available AI models"""
         if self.backend == AIBackend.OLLAMA:
             try:
-                import ollama
+                from ollama import Client
+                client = Client(host=self.ollama_base_url)
                 loop = asyncio.get_event_loop()
-                models = await loop.run_in_executor(None, ollama.list)
-                return [model['name'] for model in models.get('models', [])]
+                models = await loop.run_in_executor(None, client.list)
+                return [m['name'] for m in models.get('models', [])]
             except Exception as e:
                 print(f"Error listing Ollama models: {e}")
-                return ["llama2", "mistral", "codellama"]
+                return []
         elif self.backend == AIBackend.MLX:
             return ["Llama-2-7b-chat", "mistral-7b", "phi-2"]
         else:
