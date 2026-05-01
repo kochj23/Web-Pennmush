@@ -1,6 +1,7 @@
 # Web-Pennmush
 
 ![Build](https://github.com/kochj23/Web-Pennmush/actions/workflows/build.yml/badge.svg)
+![Tests](https://img.shields.io/badge/tests-247%20passing-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.9+-blue.svg)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.109-green.svg)
@@ -12,54 +13,44 @@ A modern, web-based MUSH (Multi-User Shared Hallucination) server inspired by th
 
 ## Architecture
 
-```
-                         +-------------------------------+
-                         |        Web Browser            |
-                         |  (HTML5 / CSS / JavaScript)   |
-                         +-------+-------------+---------+
-                                 |             |
-                         HTTP GET/POST    WebSocket (ws://)
-                                 |             |
-              +------------------+-------------+------------------+
-              |              FastAPI  (uvicorn)                    |
-              |                                                   |
-              |   /             -> index.html (game client)       |
-              |   /admin        -> admin.html (dashboard)         |
-              |   /ws           -> WebSocket handler              |
-              |   /api/*        -> REST endpoints                 |
-              |   /health       -> health check                   |
-              +--+----------------------------+---+---------------+
-                 |                            |   |
-       +---------+--------+       +-----------+   +----------+
-       |  Command Parser  |       | REST API  |   | Security |
-       |  50+ commands     |       | /api/*   |   | Module   |
-       +--+--+--+--+--+--+       +-----------+   +----------+
-          |  |  |  |  |  |           |
-    +-----+  |  |  |  |  +------+   |
-    |        |  |  |  |         |   |
-+---+---+ +--+--+ | +--+--+ +--+--+ |
-|Objects| |Soft-| | |Chan-| |Locks| |
-|Manager| |code | | |nels | |Mgr  | |
-+-------+ |Eval | | +-----+ +-----+ |
-          +-----+ |                  |
-   +---------+-+--+--+---------+     |
-   |         | |     |         |     |
-+--+--+ +---++ +----++ +------++ +---+-------+
-|Mail | |Page| |Quest| |Economy| |Moderation |
-|Mgr  | |Mgr | |Mgr  | |Mgr   | |Mgr        |
-+-----+ +----+ +-----+ +------+ +-----------+
-   |       |      |        |          |
-   +---+---+------+--------+----------+
-       |
-+------+-------+       +----------------+
-| SQLAlchemy   |       | AI Manager     |
-| (async)      |       | Ollama / MLX   |
-+------+-------+       +-------+--------+
-       |                        |
-+------+-------+       +-------+--------+
-| SQLite (dev) |       | Local LLM      |
-| PostgreSQL   |       | (llama2, etc.) |
-+--------------+       +----------------+
+```mermaid
+graph TD
+    Browser["Web Browser<br/>(HTML5 / CSS / JavaScript)"]
+
+    Browser -- "HTTP GET/POST" --> FastAPI
+    Browser -- "WebSocket (ws://)" --> FastAPI
+
+    subgraph FastAPI["FastAPI (uvicorn)"]
+        Routes["/ index.html<br/>/admin dashboard<br/>/ws WebSocket<br/>/api/* REST<br/>/health check"]
+    end
+
+    FastAPI --> CommandParser["Command Parser<br/>50+ commands"]
+    FastAPI --> RestAPI["REST API<br/>/api/*"]
+    FastAPI --> Security["Security Module<br/>Rate Limiter &bull; Input Validator"]
+
+    CommandParser --> Objects["Object Manager"]
+    CommandParser --> Softcode["Softcode Evaluator"]
+    CommandParser --> Channels["Channel System"]
+    CommandParser --> Locks["Lock Manager"]
+    CommandParser --> MailSys["Mail Manager"]
+    CommandParser --> Pages["Page Manager"]
+    CommandParser --> Quests["Quest Manager"]
+    CommandParser --> Economy["Economy Manager"]
+    CommandParser --> Moderation["Moderation Manager"]
+    CommandParser --> AIManager["AI Manager<br/>Ollama / MLX"]
+
+    RestAPI --> ORM
+    Objects --> ORM["SQLAlchemy (async)"]
+    Channels --> ORM
+    Locks --> ORM
+    MailSys --> ORM
+    Pages --> ORM
+    Quests --> ORM
+    Economy --> ORM
+    Moderation --> ORM
+
+    ORM --> DB["SQLite (dev) / PostgreSQL"]
+    AIManager --> LLM["Local LLM<br/>(llama2, mistral, etc.)"]
 ```
 
 ---
@@ -203,9 +194,25 @@ Web-Pennmush/
 |       |-- websocket.js         # WebSocket manager with reconnection
 |       |-- ui.js                # UI helpers, command history, formatting
 |       |-- roommap.js           # Interactive SVG room map renderer
+|-- tests/
+|   |-- conftest.py              # Shared fixtures (DB, sessions, test client)
+|   |-- test_models.py           # ORM model tests
+|   |-- test_config.py           # Configuration tests
+|   |-- test_security.py         # Security module tests
+|   |-- test_security_advanced.py# Advanced security and credential scanning
+|   |-- test_objects.py          # Object manager tests
+|   |-- test_channels.py         # Channel and help system tests
+|   |-- test_locks.py            # Lock evaluator tests
+|   |-- test_mail_pages.py       # Mail and page system tests
+|   |-- test_moderation.py       # Moderation system tests
+|   |-- test_quests_economy.py   # Quest and economy tests
+|   |-- test_commands.py         # Command parser tests
+|   |-- test_api.py              # REST API endpoint tests
+|   |-- test_integration.py      # Integration and cross-system tests
 |-- .github/
 |   |-- workflows/
 |       |-- build.yml            # CI build workflow
+|-- pytest.ini                   # pytest configuration
 |-- requirements.txt             # Python dependencies
 |-- AI_SETUP.md                  # Detailed AI backend setup guide
 |-- CHANGELOG.md                 # Version history
@@ -461,6 +468,72 @@ DATABASE_URL=postgresql+asyncpg://user:password@localhost/webpennmush
 4. Use PostgreSQL instead of SQLite
 5. Terminate TLS upstream (reverse proxy with HTTPS/WSS)
 6. Review rate limiting thresholds in `backend/security.py`
+
+---
+
+## Test Suite
+
+Web-Pennmush includes a comprehensive pytest test suite with 247 tests covering unit, functional, security, and integration testing.
+
+### Running Tests
+
+```bash
+pip install pytest pytest-asyncio httpx
+python -m pytest tests/ -v
+```
+
+### Test Coverage
+
+| Test File                    | Category          | Tests | Description                                              |
+|------------------------------|-------------------|-------|----------------------------------------------------------|
+| `test_models.py`             | Unit              | 14    | ORM model creation, relationships, enum values            |
+| `test_config.py`             | Unit              | 8     | Settings defaults and configuration loading               |
+| `test_security.py`           | Security          | 46    | Rate limiter, input validation, XSS/SQLi detection, AI prompt sanitization |
+| `test_security_advanced.py`  | Security          | 16    | SQL injection via ORM, XSS vectors, auth bypass attempts, credential scanning |
+| `test_objects.py`            | Unit              | 22    | Object CRUD, attributes, flags, movement, soft delete     |
+| `test_channels.py`           | Unit              | 14    | Channel CRUD, membership, help topic system               |
+| `test_locks.py`              | Unit              | 16    | Lock creation/removal, evaluator operators (AND, OR, NOT, attribute) |
+| `test_mail_pages.py`         | Unit              | 16    | Mail send/read/delete, page send/history, authorization   |
+| `test_moderation.py`         | Unit              | 10    | Ban/unban, expiry detection, ban listing                  |
+| `test_quests_economy.py`     | Unit              | 20    | Quest creation/progress, credits, transfers, transactions |
+| `test_commands.py`           | Functional        | 27    | Command parser, say/pose/look/examine, permission enforcement |
+| `test_api.py`                | Functional        | 13    | REST endpoints: registration, player/object queries, stats |
+| `test_integration.py`        | Integration       | 9     | Multi-step flows: create-examine, get-drop, dig-open-navigate |
+
+### Security Test Highlights
+
+- **SQL injection prevention**: Verifies ORM parameterised queries safely handle injection payloads
+- **XSS detection**: Tests `<script>`, `javascript:`, `onerror=`, `onload=`, `onclick=`, `<iframe>` vectors
+- **Output sanitization**: Confirms HTML entity escaping on all output text
+- **AI prompt injection**: Tests 9 jailbreak patterns (ignore instructions, reveal prompt, etc.)
+- **Rate limiting**: Verifies per-endpoint limits on login (5/min), commands (30/min), API (100/min), channels (10/min), AI (5/min)
+- **Credential scanning**: Scans all backend Python files for hardcoded API keys, AWS keys, GitHub PATs, Slack tokens
+- **Password hashing**: Verifies bcrypt is used with proper verification
+- **Permission enforcement**: Confirms moderation, economy grants, and quest creation require wizard/god flags
+
+---
+
+## Security Features
+
+Web-Pennmush implements defense-in-depth security:
+
+| Layer                    | Implementation                                                    |
+|--------------------------|-------------------------------------------------------------------|
+| **Password hashing**     | bcrypt via passlib (no plaintext storage)                         |
+| **WebSocket auth**       | Credential verification required before any command execution     |
+| **Permission hierarchy** | God > Wizard > Royal > User; enforced on all admin commands       |
+| **Rate limiting**        | In-memory per-key limits on login, commands, API, channels, AI    |
+| **Input validation**     | Length limits, character whitelisting, SQL keyword detection       |
+| **XSS protection**       | HTML entity escaping on all output; pattern detection on input    |
+| **AI prompt injection**  | Jailbreak pattern detection and aggressive sanitization           |
+| **Soft delete**          | Objects are never truly deleted (GARBAGE type), preserving audit trail |
+| **Security logging**     | Failed logins, rate limit violations, suspicious input, admin actions |
+
+### Known Security Gaps (documented by test suite)
+
+1. **Registration endpoint**: Does not enforce minimum password length or non-empty username validation. WebSocket auth layer catches some of these cases.
+2. **Lock evaluator recursion**: Parenthesised expressions with internal `|` or `&` operators can hit recursion limits. The evaluator fails secure (returns `False`).
+3. **Default SECRET_KEY**: The configuration ships with a placeholder secret key. Must be changed for production.
 
 ---
 
