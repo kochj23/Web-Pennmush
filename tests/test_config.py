@@ -34,8 +34,8 @@ class TestSettings:
     def test_ai_defaults(self):
         s = Settings()
         assert s.AI_BACKEND == "auto"
-        assert s.AI_DEFAULT_MODEL == "llama2"
-        assert s.OLLAMA_BASE_URL == "http://localhost:11434"
+        assert s.AI_DEFAULT_MODEL == "nova:latest"
+        assert s.OLLAMA_BASE_URL == "http://127.0.0.1:11434"
         assert s.AI_ENABLE_GAME_GUIDE is True
 
     def test_mush_defaults(self):
