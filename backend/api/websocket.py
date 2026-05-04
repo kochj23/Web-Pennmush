@@ -24,6 +24,7 @@ class ConnectionManager:
     """
     Manages active WebSocket connections.
     Maps player IDs to WebSocket connections for real-time messaging.
+    Maintains a room-to-player cache to avoid DB queries on every broadcast.
     """
 
     def __init__(self):
@@ -33,6 +34,8 @@ class ConnectionManager:
         self.session_map: Dict[WebSocket, int] = {}
         # Track last activity: player_id -> datetime
         self.last_activity: Dict[int, datetime] = {}
+        # Room-to-player cache: room_id -> set of player_ids
+        self._room_cache: Dict[int, Set[int]] = {}
 
     async def connect(self, websocket: WebSocket, player_id: int):
         """Register a new connection (websocket must already be accepted)"""
@@ -40,12 +43,28 @@ class ConnectionManager:
         self.session_map[websocket] = player_id
 
     def disconnect(self, websocket: WebSocket):
-        """Remove a connection"""
+        """Remove a connection and invalidate room cache for that player"""
         player_id = self.session_map.get(websocket)
         if player_id:
             self.active_connections.pop(player_id, None)
             self.session_map.pop(websocket, None)
+            # Remove player from all cached rooms
+            for room_players in self._room_cache.values():
+                room_players.discard(player_id)
         return player_id
+
+    def update_room_cache(self, player_id: int, old_room_id: int = None, new_room_id: int = None):
+        """Update the room cache when a player moves, connects, or disconnects."""
+        if old_room_id is not None and old_room_id in self._room_cache:
+            self._room_cache[old_room_id].discard(player_id)
+        if new_room_id is not None:
+            if new_room_id not in self._room_cache:
+                self._room_cache[new_room_id] = set()
+            self._room_cache[new_room_id].add(player_id)
+
+    def invalidate_room_cache(self, room_id: int):
+        """Force a cache miss for a specific room (e.g., after a teleport)."""
+        self._room_cache.pop(room_id, None)
 
     async def send_personal_message(self, message: str, player_id: int):
         """Send a message to a specific player"""
@@ -58,14 +77,20 @@ class ConnectionManager:
                 self.active_connections.pop(player_id, None)
 
     async def broadcast_to_room(self, message: str, room_id: int, exclude_player_id: int = None):
-        """Send a message to all players in a room"""
-        async with AsyncSessionLocal() as session:
-            obj_mgr = ObjectManager(session)
-            players = await obj_mgr.get_players_in_room(room_id)
+        """Send a message to all connected players in a room, using cache when available."""
+        if room_id in self._room_cache:
+            player_ids = self._room_cache[room_id]
+        else:
+            # Cache miss: query DB and populate cache
+            async with AsyncSessionLocal() as session:
+                obj_mgr = ObjectManager(session)
+                players = await obj_mgr.get_players_in_room(room_id)
+                player_ids = {p.id for p in players}
+                self._room_cache[room_id] = player_ids
 
-            for player in players:
-                if player.id != exclude_player_id and player.id in self.active_connections:
-                    await self.send_personal_message(message, player.id)
+        for pid in player_ids:
+            if pid != exclude_player_id and pid in self.active_connections:
+                await self.send_personal_message(message, pid)
 
     async def broadcast_global(self, message: str):
         """Send a message to all connected players"""
@@ -149,9 +174,11 @@ async def handle_websocket(websocket: WebSocket):
         player.last_login = datetime.utcnow()
         await session.commit()
 
-        # Register connection
+        # Register connection and update room cache
         await manager.connect(websocket, player_id)
         manager.last_activity[player_id] = datetime.utcnow()
+        if player.location_id is not None:
+            manager.update_room_cache(player_id, new_room_id=player.location_id)
 
         # Send welcome message
         welcome_msg = {
@@ -224,7 +251,7 @@ async def handle_websocket(websocket: WebSocket):
     finally:
         # Clean up connection
         if websocket in manager.session_map:
-            disconnected_player_id = manager.disconnect(websocket)
+            disconnected_player_id = manager.disconnect(websocket)  # also clears room cache
 
             if disconnected_player_id and session:
                 try:

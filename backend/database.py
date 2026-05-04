@@ -2,6 +2,7 @@
 Web-Pennmush Database Connection and Initialization
 Author: Jordan Koch (GitHub: kochj23)
 """
+import secrets
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.pool import StaticPool
 from backend.models import Base, DBObject, ObjectType, Attribute, Channel, ChannelMembership, HelpTopic
@@ -56,12 +57,13 @@ async def init_db():
         if result is None:
             print("Creating initial game world...")
 
-            # Create God/Admin account (object #1)
+            # Create God/Admin account (object #1) with random password
+            god_password = secrets.token_urlsafe(16)
             god = DBObject(
                 id=1,
                 name="One",
                 type=ObjectType.PLAYER,
-                password_hash=pwd_context.hash("potrzebie"),  # Default password, CHANGE THIS
+                password_hash=pwd_context.hash(god_password),
                 description="The One. The Administrator of this MUSH.",
                 flags="GOD,WIZARD,ROYAL",
                 created_at=datetime.utcnow(),
@@ -461,7 +463,8 @@ Related: help @create, help talk
             await session.commit()
             print("Initial game world created successfully!")
             print("  - Room Zero (#0): The Void")
-            print("  - God/Admin (#1): One (password: potrzebie)")
+            print(f"  - God/Admin (#1): One (password: {god_password})")
+            print("  *** SAVE THIS PASSWORD - it will NOT be shown again ***")
             print("  - Central Plaza (#2): Starting room")
             print("  - Exits (#3, #4): Portal connections")
             print("  - Magic Crystal (#5): Sample object")

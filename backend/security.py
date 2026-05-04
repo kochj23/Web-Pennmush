@@ -7,18 +7,19 @@ Security utilities including rate limiting, input validation, and protection.
 from typing import Optional, Dict
 from datetime import datetime, timedelta
 from collections import defaultdict
+import json
+import os
 import re
 import html
 
 
 class RateLimiter:
     """
-    Simple in-memory rate limiter.
-    For production, use Redis-based rate limiting (e.g., slowapi).
+    Rate limiter with JSON file persistence so state survives restarts.
     """
 
-    def __init__(self):
-        # Store: {key: [(timestamp, count), ...]}
+    def __init__(self, persist_path: Optional[str] = None):
+        # Store: {key: [iso_timestamp, ...]}
         self.requests: Dict[str, list] = defaultdict(list)
         self.limits = {
             "login": (5, 60),  # 5 attempts per 60 seconds
@@ -27,6 +28,45 @@ class RateLimiter:
             "channel": (10, 60),  # 10 channel messages per 60 seconds
             "ai": (5, 60),  # 5 AI requests per 60 seconds
         }
+        self._persist_path = persist_path or os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), ".rate_limit_state.json"
+        )
+        self._load_state()
+
+    def _load_state(self):
+        """Load persisted rate limit state from disk."""
+        try:
+            if os.path.exists(self._persist_path):
+                with open(self._persist_path, "r") as f:
+                    data = json.load(f)
+                now = datetime.utcnow()
+                for identifier, timestamps in data.items():
+                    # Parse ISO timestamps and discard anything older than the
+                    # longest window (60 seconds for all current limits)
+                    parsed = []
+                    for ts in timestamps:
+                        try:
+                            dt = datetime.fromisoformat(ts)
+                            if (now - dt).total_seconds() < 120:  # generous buffer
+                                parsed.append(dt)
+                        except (ValueError, TypeError):
+                            continue
+                    if parsed:
+                        self.requests[identifier] = parsed
+        except (json.JSONDecodeError, OSError):
+            # Corrupted or unreadable file, start fresh
+            self.requests = defaultdict(list)
+
+    def _save_state(self):
+        """Persist current rate limit state to disk."""
+        try:
+            serializable = {}
+            for identifier, timestamps in self.requests.items():
+                serializable[identifier] = [dt.isoformat() for dt in timestamps]
+            with open(self._persist_path, "w") as f:
+                json.dump(serializable, f)
+        except OSError:
+            pass  # Best effort persistence
 
     def is_allowed(self, key: str, limit_type: str = "command") -> bool:
         """
@@ -55,10 +95,12 @@ class RateLimiter:
 
         # Check if under limit
         if len(self.requests[identifier]) >= max_requests:
+            self._save_state()
             return False
 
         # Add current request
         self.requests[identifier].append(now)
+        self._save_state()
         return True
 
     def get_remaining(self, key: str, limit_type: str = "command") -> int:
@@ -83,6 +125,7 @@ class RateLimiter:
         identifier = f"{limit_type}:{key}"
         if identifier in self.requests:
             del self.requests[identifier]
+        self._save_state()
 
 
 class InputValidator:
