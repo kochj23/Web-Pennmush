@@ -174,9 +174,13 @@
                 if (online.length === 0) {
                     container.innerHTML = '<p>No players online</p>';
                 } else {
-                    container.innerHTML = online.map(p =>
-                        `<div>${p.name} (#${p.id})</div>`
-                    ).join('');
+                    container.innerHTML = '';
+                    online.forEach(p => {
+                        const row = document.createElement('div');
+                        // textContent, not innerHTML — player names are untrusted
+                        row.textContent = `${p.name} (#${p.id})`;
+                        container.appendChild(row);
+                    });
                 }
             } catch (error) {
                 console.error('Error fetching players:', error);

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.database import get_db
 from backend.models import DBObject, ObjectType
 from backend.engine.objects import ObjectManager
+from backend.security import input_validator
 from passlib.context import CryptContext
 from pydantic import BaseModel, EmailStr
 from typing import Optional, List
@@ -64,6 +65,13 @@ async def register_player(player_data: PlayerCreate, db: AsyncSession = Depends(
     Creates a player object and places them in the starting room.
     """
     obj_mgr = ObjectManager(db)
+
+    # Validate the username the same way the WebSocket login path does, so a
+    # malicious name (e.g. an HTML/script payload) can never be persisted and
+    # later rendered in the who-list or admin dashboard (stored XSS).
+    is_valid, error = input_validator.validate_name(player_data.username)
+    if not is_valid:
+        raise HTTPException(status_code=400, detail=error)
 
     # Check if username already exists
     existing = await obj_mgr.get_object_by_name(player_data.username)

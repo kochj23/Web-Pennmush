@@ -12,10 +12,12 @@ class Settings(BaseSettings):
     # Application
     APP_NAME: str = "Web-Pennmush"
     APP_VERSION: str = "3.0.0"
-    DEBUG: bool = True
+    # Secure defaults: no auto-reload / verbose tracebacks and loopback-only bind
+    # unless an operator explicitly overrides them via environment/.env.
+    DEBUG: bool = False
 
     # Server
-    HOST: str = "0.0.0.0"
+    HOST: str = "127.0.0.1"
     PORT: int = 8000
 
     # Database

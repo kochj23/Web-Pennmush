@@ -130,10 +130,12 @@ function updatePlayersList(players) {
     players.forEach(player => {
         const playerDiv = document.createElement('div');
         playerDiv.className = 'player-item';
-        playerDiv.innerHTML = `
-            <span class="player-status"></span>
-            <span>${player.name}</span>
-        `;
+        const statusSpan = document.createElement('span');
+        statusSpan.className = 'player-status';
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = player.name; // textContent, never innerHTML — no HTML injection
+        playerDiv.appendChild(statusSpan);
+        playerDiv.appendChild(nameSpan);
         playersListDiv.appendChild(playerDiv);
     });
 }
