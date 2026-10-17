@@ -122,7 +122,11 @@ function updatePlayersList(players) {
     if (!playersListDiv) return;
 
     if (players.length === 0) {
-        playersListDiv.innerHTML = '<div class="no-players">No players online</div>';
+        playersListDiv.replaceChildren();
+        const none = document.createElement('div');
+        none.className = 'no-players';
+        none.textContent = 'No players online';
+        playersListDiv.appendChild(none);
         return;
     }
 
@@ -130,12 +134,12 @@ function updatePlayersList(players) {
     players.forEach(player => {
         const playerDiv = document.createElement('div');
         playerDiv.className = 'player-item';
-        const statusSpan = document.createElement('span');
-        statusSpan.className = 'player-status';
-        const nameSpan = document.createElement('span');
-        nameSpan.textContent = player.name; // textContent, never innerHTML — no HTML injection
-        playerDiv.appendChild(statusSpan);
-        playerDiv.appendChild(nameSpan);
+        const status = document.createElement('span');
+        status.className = 'player-status';
+        const name = document.createElement('span');
+        name.textContent = player.name;  // never innerHTML for user-controlled text
+        playerDiv.appendChild(status);
+        playerDiv.appendChild(name);
         playersListDiv.appendChild(playerDiv);
     });
 }
@@ -200,7 +204,7 @@ function showTab(tabName) {
     // Activate button
     const buttons = document.querySelectorAll('.tab-button');
     buttons.forEach(button => {
-        if (button.textContent.toLowerCase().includes(tabName)) {
+        if (button.dataset.tab === tabName) {
             button.classList.add('active');
         }
     });

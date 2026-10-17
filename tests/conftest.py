@@ -4,6 +4,24 @@ Author: Jordan Koch (GitHub: kochj23)
 
 Shared fixtures for the entire test suite.
 """
+import os
+
+os.environ.setdefault("BCRYPT_ROUNDS", "4")
+os.environ.setdefault("REGISTRATION_MODE", "open")
+os.environ.setdefault("DATA_DIR", os.path.join(os.path.dirname(__file__), ".data"))
+os.makedirs(os.environ["DATA_DIR"], exist_ok=True)
+_APP_DB = os.path.join(os.environ["DATA_DIR"], "app-test.db")
+for _suffix in ("", "-wal", "-shm", "-journal"):
+    try:
+        os.remove(_APP_DB + _suffix)
+    except FileNotFoundError:
+        pass
+# The app-level engine (used by WebSocket/auth paths) points at a throwaway file DB.
+os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_APP_DB}"
+os.environ["DATABASE_MIGRATE_URL"] = ""
+os.environ.setdefault("GOD_PASSWORD", "god-test-password")
+os.environ.setdefault("SECRET_KEY", "test-only-secret-key-not-for-production")
+
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
@@ -18,7 +36,7 @@ from backend.models import (
 )
 from backend.config import Settings
 from backend.security import RateLimiter, InputValidator, SecurityLogger
-from passlib.context import CryptContext
+from backend.passwords import pwd_context
 from datetime import datetime
 
 
@@ -28,7 +46,15 @@ from datetime import datetime
 
 TEST_DATABASE_URL = "sqlite+aiosqlite://"
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+
+@pytest.fixture(autouse=True)
+def _reset_global_rate_limiter():
+    """The app uses a process-wide limiter; isolate tests from each other."""
+    from backend.security import rate_limiter as global_limiter
+    global_limiter.clear()
+    yield
+    global_limiter.clear()
 
 
 @pytest_asyncio.fixture
@@ -269,3 +295,17 @@ async def app_client(engine):
         yield client
 
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def admin_headers():
+    """Bearer header for the seeded God account (#1)."""
+    from backend.auth import issue_token
+    return {"Authorization": f"Bearer {issue_token(1)}"}
+
+
+@pytest.fixture
+def make_headers():
+    """Factory: bearer header for any player id."""
+    from backend.auth import issue_token
+    return lambda pid: {"Authorization": f"Bearer {issue_token(pid)}"}

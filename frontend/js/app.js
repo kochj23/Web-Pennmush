@@ -21,6 +21,7 @@ function init() {
 
     // Set up input handlers
     setupInputHandlers();
+    setupStaticHandlers();
 
     // Connect to WebSocket
     wsManager.connect();
@@ -66,7 +67,7 @@ function setupWebSocketHandlers() {
 
         // Load room map
         if (typeof roomMapVisualizer !== 'undefined') {
-            roomMapVisualizer.loadMap(0, 5);
+            roomMapVisualizer.loadMap(0, 3);
         }
     });
 
@@ -126,6 +127,41 @@ function setupInputHandlers() {
 }
 
 /**
+ * Wire buttons/forms that used to have inline handlers (strict CSP forbids them).
+ */
+function setupStaticHandlers() {
+    document.querySelectorAll('[data-cmd]').forEach(btn => {
+        btn.addEventListener('click', () => sendCommand(btn.dataset.cmd));
+    });
+    document.querySelectorAll('[data-tab]').forEach(btn => {
+        btn.addEventListener('click', () => showTab(btn.dataset.tab));
+    });
+    const refresh = document.getElementById('refresh-map');
+    if (refresh) refresh.addEventListener('click', () => roomMapVisualizer.loadMap(0, 3));
+    const loginForm = document.getElementById('login-form');
+    if (loginForm) loginForm.addEventListener('submit', handleLogin);
+    const registerForm = document.getElementById('register-form');
+    if (registerForm) registerForm.addEventListener('submit', handleRegister);
+}
+
+/**
+ * REST login: returns a session token (also set as an HttpOnly cookie).
+ */
+async function restLogin(username, password) {
+    const response = await fetch('api/auth/login', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: username, password: password })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+        throw new Error(data.detail || 'Login failed');
+    }
+    return data;
+}
+
+/**
  * Send command from input field
  */
 function sendCurrentCommand() {
@@ -170,7 +206,8 @@ async function handleLogin(event) {
     const password = document.getElementById('login-password').value;
 
     try {
-        await wsManager.authenticate(username, password);
+        const session = await restLogin(username, password);
+        await wsManager.authenticate(null, null, session.token);
         // Success is handled by the 'welcome' message handler
     } catch (error) {
         showError('login-error', error.message);
@@ -185,18 +222,19 @@ async function handleRegister(event) {
 
     const username = document.getElementById('register-username').value;
     const password = document.getElementById('register-password').value;
-    const email = document.getElementById('register-email').value;
+    const invite = document.getElementById('register-invite').value;
 
     try {
-        const response = await fetch('/api/players/register', {
+        const response = await fetch('api/players/register', {
             method: 'POST',
+            credentials: 'same-origin',
             headers: {
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({
                 username: username,
                 password: password,
-                email: email || null
+                invite_code: invite || null
             })
         });
 
@@ -210,11 +248,12 @@ async function handleRegister(event) {
         // Show success message
         addOutput(`Account created: ${data.name}`);
 
-        // Auto-login
+        // Auto-login (fails with a clear message while the account awaits approval)
         try {
-            await wsManager.authenticate(username, password);
+            const session = await restLogin(username, password);
+            await wsManager.authenticate(null, null, session.token);
         } catch (error) {
-            showError('register-error', 'Account created but login failed. Please try logging in manually.');
+            showError('register-error', error.message);
         }
     } catch (error) {
         showError('register-error', error.message);
@@ -226,7 +265,7 @@ async function handleRegister(event) {
  */
 async function refreshPlayersList() {
     try {
-        const response = await fetch('/api/players');
+        const response = await fetch('api/players', { credentials: 'same-origin' });
         if (response.ok) {
             const players = await response.json();
             const onlinePlayers = players.filter(p => p.is_connected);
@@ -242,7 +281,7 @@ async function refreshPlayersList() {
  */
 async function getServerStats() {
     try {
-        const response = await fetch('/api/stats');
+        const response = await fetch('api/stats', { credentials: 'same-origin' });
         if (response.ok) {
             const stats = await response.json();
             let output = '=== Server Statistics ===\n';

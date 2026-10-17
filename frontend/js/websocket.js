@@ -22,8 +22,10 @@ class WebSocketManager {
      * Connect to the WebSocket server
      */
     connect() {
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/ws`;
+        // Relative to the page so it works under a path prefix (e.g. /mush/).
+        const url = new URL('ws', window.location.href);
+        url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = url.toString();
 
         console.log('Connecting to WebSocket:', wsUrl);
 
@@ -76,7 +78,7 @@ class WebSocketManager {
     /**
      * Authenticate with the server
      */
-    authenticate(username, password) {
+    authenticate(username, password, token) {
         return new Promise((resolve, reject) => {
             if (!this.connected) {
                 reject(new Error('Not connected to server'));
@@ -96,12 +98,10 @@ class WebSocketManager {
             this.on('welcome', authHandler);
             this.on('error', authHandler);
 
-            // Send authentication
-            this.send({
-                type: 'auth',
-                username: username,
-                password: password
-            });
+            // Prefer the session token from the REST login (password never
+            // travels over the socket then).
+            this.send(token ? { type: 'auth', token: token }
+                            : { type: 'auth', username: username, password: password });
         });
     }
 

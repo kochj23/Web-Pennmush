@@ -141,8 +141,8 @@ class TestAuthBypass:
             pass
 
     @pytest.mark.asyncio
-    async def test_get_player_with_negative_id(self, app_client):
-        resp = await app_client.get("/api/players/-1")
+    async def test_get_player_with_negative_id(self, app_client, admin_headers):
+        resp = await app_client.get("/api/players/-1", headers=admin_headers)
         assert resp.status_code == 404
 
 
@@ -179,12 +179,9 @@ class TestNoHardcodedCredentials:
         assert findings == [], f"Hardcoded credentials found: {findings}"
 
     def test_secret_key_placeholder_is_not_production(self):
-        """The default SECRET_KEY should clearly be a placeholder."""
+        """No SECRET_KEY default in code: it must come from the environment."""
         from backend.config import Settings
-        s = Settings()
-        placeholder = s.SECRET_KEY
-        assert "change" in placeholder.lower() or "your" in placeholder.lower(), \
-            "SECRET_KEY should clearly be a non-production placeholder"
+        assert Settings.model_fields["SECRET_KEY"].default == ""
 
 
 # ---------------------------------------------------------------------------
@@ -193,8 +190,7 @@ class TestNoHardcodedCredentials:
 
 class TestPasswordHashing:
     def test_bcrypt_used(self):
-        from passlib.context import CryptContext
-        ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+        from backend.passwords import pwd_context as ctx
         hashed = ctx.hash("testpassword")
         assert hashed.startswith("$2b$") or hashed.startswith("$2a$")
         assert ctx.verify("testpassword", hashed) is True

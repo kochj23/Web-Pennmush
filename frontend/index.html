@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Web-Pennmush - Modern MUSH Client</title>
-    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="static/css/style.css">
 </head>
 <body>
     <!-- Header -->
@@ -39,18 +39,18 @@
             <div class="panel">
                 <h2>Quick Commands</h2>
                 <div class="quick-commands">
-                    <button onclick="sendCommand('look')">Look</button>
-                    <button onclick="sendCommand('inventory')">Inventory</button>
-                    <button onclick="sendCommand('who')">Who</button>
-                    <button onclick="sendCommand('channel/list')">Channels</button>
-                    <button onclick="sendCommand('help')">Help</button>
+                    <button data-cmd="look">Look</button>
+                    <button data-cmd="inventory">Inventory</button>
+                    <button data-cmd="who">Who</button>
+                    <button data-cmd="channel/list">Channels</button>
+                    <button data-cmd="help">Help</button>
                 </div>
             </div>
 
             <div class="panel">
                 <h2>Room Map</h2>
                 <div id="room-map-container"></div>
-                <button onclick="roomMapVisualizer.loadMap(0, 5)" style="width: 100%; margin-top: 0.5rem; padding: 0.5rem; background: var(--bg-tertiary); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 4px; cursor: pointer;">Refresh Map</button>
+                <button id="refresh-map" class="map-refresh">Refresh Map</button>
             </div>
         </aside>
 
@@ -101,13 +101,13 @@
             <h2>Connect to Web-Pennmush</h2>
 
             <div class="tabs">
-                <button class="tab-button active" onclick="showTab('login')">Login</button>
-                <button class="tab-button" onclick="showTab('register')">Register</button>
+                <button class="tab-button active" data-tab="login">Login</button>
+                <button class="tab-button" data-tab="register">Register</button>
             </div>
 
             <!-- Login Form -->
             <div id="login-tab" class="tab-content active">
-                <form id="login-form" onsubmit="handleLogin(event)">
+                <form id="login-form">
                     <div class="form-group">
                         <label for="login-username">Username</label>
                         <input type="text" id="login-username" required autocomplete="username">
@@ -120,25 +120,24 @@
                     <div id="login-error" class="error-message"></div>
                 </form>
                 <div class="login-help">
-                    <p><strong>First time?</strong> Use the Register tab to create an account.</p>
-                    <p><strong>Default account:</strong> Username: <code>One</code>, Password: <code>potrzebie</code></p>
+                    <p><strong>First time?</strong> Use the Register tab. New accounts need an invite code or admin approval.</p>
                 </div>
             </div>
 
             <!-- Register Form -->
             <div id="register-tab" class="tab-content">
-                <form id="register-form" onsubmit="handleRegister(event)">
+                <form id="register-form">
                     <div class="form-group">
                         <label for="register-username">Username</label>
-                        <input type="text" id="register-username" required autocomplete="username">
+                        <input type="text" id="register-username" required autocomplete="username" maxlength="30">
                     </div>
                     <div class="form-group">
                         <label for="register-password">Password</label>
-                        <input type="password" id="register-password" required autocomplete="new-password">
+                        <input type="password" id="register-password" required autocomplete="new-password" minlength="8" maxlength="72">
                     </div>
                     <div class="form-group">
-                        <label for="register-email">Email (optional)</label>
-                        <input type="email" id="register-email" autocomplete="email">
+                        <label for="register-invite">Invite code (if you have one)</label>
+                        <input type="text" id="register-invite" autocomplete="off" maxlength="128">
                     </div>
                     <button type="submit" class="btn-primary">Create Account</button>
                     <div id="register-error" class="error-message"></div>
@@ -153,13 +152,13 @@
         <span>|</span>
         <span>Inspired by PennMUSH</span>
         <span>|</span>
-        <a href="https://github.com/kochj23/Web-Pennmush" target="_blank">GitHub</a>
+        <a href="https://github.com/kochj23/Web-Pennmush" rel="noopener noreferrer">GitHub</a>
     </footer>
 
     <!-- Scripts -->
-    <script src="/static/js/websocket.js"></script>
-    <script src="/static/js/ui.js"></script>
-    <script src="/static/js/roommap.js"></script>
-    <script src="/static/js/app.js"></script>
+    <script src="static/js/websocket.js"></script>
+    <script src="static/js/ui.js"></script>
+    <script src="static/js/roommap.js"></script>
+    <script src="static/js/app.js"></script>
 </body>
 </html>

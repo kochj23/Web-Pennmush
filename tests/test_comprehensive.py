@@ -267,8 +267,8 @@ class TestAIManagerUnit:
             mgr = AIManager()
         status = mgr.get_status()
         assert "backend" in status
-        assert "ollama_available" in status
-        assert "mlx_available" in status
+        assert "relay_configured" in status
+        assert "queue_depth" in status
         assert "is_configured" in status
 
     def test_placeholder_response(self):
@@ -961,30 +961,25 @@ class TestConfigurationIntegrity:
     """Verify configuration defaults are sane and safe."""
 
     def test_secret_key_is_placeholder(self):
-        """SECRET_KEY should be a clear placeholder, not a real secret."""
-        s = Settings()
-        assert "change" in s.SECRET_KEY.lower() or "your" in s.SECRET_KEY.lower()
+        """SECRET_KEY has no baked-in default; production injects it via env."""
+        assert Settings.model_fields["SECRET_KEY"].default == ""
 
     def test_database_url_is_sqlite(self):
-        """Default database should be SQLite (not external)."""
-        s = Settings()
-        assert "sqlite" in s.DATABASE_URL
-        assert "aiosqlite" in s.DATABASE_URL
+        """Without DB env the local-dev fallback is SQLite; prod sets Postgres."""
+        s = Settings(DATABASE_URL="", DB_HOST="")
+        assert "sqlite+aiosqlite" in s.database_url()
 
     def test_host_default_is_all_interfaces(self):
-        """Default host should bind to all interfaces."""
-        s = Settings()
-        assert s.HOST == "0.0.0.0"
+        """Default host is loopback; the container opts in to 0.0.0.0 explicitly."""
+        assert Settings.model_fields["HOST"].default == "127.0.0.1"
 
     def test_ai_backend_default_is_auto(self):
-        """AI backend should default to auto-detect."""
-        s = Settings()
-        assert s.AI_BACKEND == "auto"
+        """AI goes through the Nova Games relay by default."""
+        assert Settings.model_fields["AI_BACKEND"].default == "relay"
 
     def test_ollama_url_is_localhost(self):
-        """Ollama URL should point to localhost."""
-        s = Settings()
-        assert "127.0.0.1" in s.OLLAMA_BASE_URL or "localhost" in s.OLLAMA_BASE_URL
+        """The server has no direct LLM URL at all (relay pull model)."""
+        assert "OLLAMA_BASE_URL" not in Settings.model_fields
 
     def test_security_defaults_reasonable(self):
         """Rate limit defaults should be reasonable."""
@@ -1036,9 +1031,9 @@ class TestModelEnums:
     def test_ai_backend_enum(self):
         from backend.engine.ai_manager import AIBackend
         backends = [e.value for e in AIBackend]
-        assert "ollama" in backends
-        assert "mlx" in backends
+        assert "relay" in backends
         assert "none" in backends
+        assert "ollama" not in backends and "mlx" not in backends
 
 
 class TestFastAPIRoutes:
@@ -1046,7 +1041,7 @@ class TestFastAPIRoutes:
 
     def test_api_routes_registered(self):
         from backend.main import app
-        routes = [route.path for route in app.routes]
+        routes = [getattr(route, "path", None) for route in app.routes]
         assert "/" in routes
         assert "/ws" in routes
         assert "/health" in routes
@@ -1058,14 +1053,14 @@ class TestFastAPIRoutes:
             getattr(route, "name", None)
             for route in app.routes
         ]
-        assert "static" in route_names
+        assert "static-css" in route_names and "static-js" in route_names
 
     @pytest.mark.asyncio
     async def test_health_endpoint_returns_version(self, app_client):
         resp = await app_client.get("/health")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["version"] == "3.0.0"
+        assert data["version"] == "3.1.0"
 
 
 class TestSeededWorldIntegrity:

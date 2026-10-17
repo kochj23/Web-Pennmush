@@ -35,7 +35,8 @@ class RoomMapVisualizer {
      */
     async loadMap(centerRoomId = 0, radius = 5) {
         try {
-            const response = await fetch(`/api/rooms/map?center_room_id=${centerRoomId}&radius=${radius}`);
+            const params = new URLSearchParams({ center_room_id: String(centerRoomId), radius: String(radius) });
+            const response = await fetch(`api/rooms/map?${params}`, { credentials: 'same-origin' });
             if (!response.ok) {
                 throw new Error('Failed to load room map');
             }
@@ -142,7 +143,10 @@ class RoomMapVisualizer {
      */
     showError(message) {
         if (!this.container) return;
-        this.container.innerHTML = `<div style="padding: 1rem; color: var(--error-color); text-align: center;">${message}</div>`;
+        const div = document.createElement('div');
+        div.className = 'map-error';
+        div.textContent = message;
+        this.container.replaceChildren(div);
     }
 
     /**

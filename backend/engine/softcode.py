@@ -16,7 +16,30 @@ import json
 import hashlib
 from datetime import datetime
 from backend.models import DBObject, ObjectType, Attribute
+from backend.engine.softcode_budget import (
+    EvalBudget, SoftcodeBudgetExceeded, current_budget, activate_budget, deactivate_budget,
+    check_size_args,
+)
 from sqlalchemy import select
+import regex as _regex
+
+# User-supplied patterns run with a hard timeout (ReDoS guard) and length caps.
+_RE_TIMEOUT_S = 0.05
+_RE_MAX_PATTERN = 256
+_RE_MAX_SUBJECT = 8192
+
+
+def _wild_to_regex(pattern: str) -> str:
+    """MUSH wildcard (* ?) to an escaped regex."""
+    return _regex.escape(pattern).replace(r"\*", ".*").replace(r"\?", ".")
+
+
+def _safe_re(op: str, pattern: str, string: str, *extra, flags: int = 0):
+    if len(pattern) > _RE_MAX_PATTERN or len(string) > _RE_MAX_SUBJECT:
+        raise ValueError("pattern or subject too long")
+    fn = getattr(_regex, op)
+    return fn(pattern, *extra, string, flags=flags, timeout=_RE_TIMEOUT_S) if op == "sub" else \
+        fn(pattern, string, flags=flags, timeout=_RE_TIMEOUT_S)
 
 
 class SoftcodeInterpreter:
@@ -324,13 +347,33 @@ class SoftcodeInterpreter:
         if context is None:
             context = {}
 
-        # Process substitutions (%0-%9, %#, etc.)
-        code = self._process_substitutions(code, context, executor_id)
+        budget = current_budget()
+        if budget is None:
+            # Top-level evaluation: install a fresh global budget for this command.
+            budget = EvalBudget.from_settings()
+            token = activate_budget(budget)
+            try:
+                result = await self._eval_inner(code, context, executor_id, budget)
+            except SoftcodeBudgetExceeded as exc:
+                return f"#-1 {exc.reason}"
+            finally:
+                deactivate_budget(token)
+            if budget.exceeded:
+                return f"#-1 {budget.exceeded}"
+            return result
 
-        # Process function calls [function(args)]
-        code = await self._process_functions(code, context, executor_id)
+        return await self._eval_inner(code, context, executor_id, budget)
 
-        return code
+    async def _eval_inner(self, code: str, context: Dict, executor_id: Optional[int], budget: EvalBudget) -> str:
+        budget.enter()
+        try:
+            budget.check_output(code)
+            # Process substitutions (%0-%9, %#, etc.)
+            code = self._process_substitutions(code, context, executor_id)
+            # Process function calls [function(args)]
+            return await self._process_functions(code, context, executor_id)
+        finally:
+            budget.leave()
 
     def _process_substitutions(self, code: str, context: Dict, executor_id: Optional[int]) -> str:
         """Process % substitutions"""
@@ -365,11 +408,23 @@ class SoftcodeInterpreter:
             # Parse arguments (comma-separated)
             args = self._parse_args(args_str)
 
+            budget = current_budget()
+            if budget is not None:
+                budget.tick()
+
             # Execute function
             if func_name in self.functions:
                 try:
-                    result = await self.functions[func_name](args, context, executor_id)
-                    code = code[:match.start()] + str(result) + code[match.end():]
+                    too_big = check_size_args(func_name, args)
+                    result = too_big if too_big else await self.functions[func_name](args, context, executor_id)
+                    result = str(result)
+                    if budget is not None:
+                        budget.check_output(result)
+                    code = code[:match.start()] + result + code[match.end():]
+                    if budget is not None:
+                        budget.check_output(code)
+                except SoftcodeBudgetExceeded:
+                    raise
                 except Exception as e:
                     error_msg = f"#-1 ERROR: {str(e)}"
                     code = code[:match.start()] + error_msg + code[match.end():]
@@ -829,9 +884,9 @@ class SoftcodeInterpreter:
         pattern = args[1]
 
         # Convert wildcard to regex
-        regex_pattern = pattern.replace("*", ".*").replace("?", ".")
+        regex_pattern = _wild_to_regex(pattern)
         try:
-            return 1 if re.fullmatch(regex_pattern, string, re.IGNORECASE) else 0
+            return 1 if _safe_re("fullmatch", regex_pattern, string, flags=_regex.IGNORECASE) else 0
         except:
             return 0
 
@@ -842,7 +897,7 @@ class SoftcodeInterpreter:
         string = args[0]
         pattern = args[1]
         try:
-            return 1 if re.search(pattern, string) else 0
+            return 1 if _safe_re("search", pattern, string) else 0
         except:
             return 0
 
@@ -854,7 +909,7 @@ class SoftcodeInterpreter:
         pattern = args[1]
         replacement = args[2]
         try:
-            return re.sub(pattern, replacement, string)
+            return _safe_re("sub", pattern, string, replacement)
         except:
             return string
 
@@ -1175,6 +1230,8 @@ class SoftcodeInterpreter:
             delimiter = args[3] if len(args) > 3 else " "
 
             numbers = range(start, end + 1, step)
+            if len(numbers) > 4096:
+                return "#-1 TOO MANY NUMBERS"
             return delimiter.join(str(n) for n in numbers)
         except ValueError:
             return ""
@@ -2084,9 +2141,9 @@ class SoftcodeInterpreter:
         if len(args) < 2:
             return ""
         delimiter = args[2] if len(args) > 2 else " "
-        pattern = args[1].replace("*", ".*")
+        pattern = _wild_to_regex(args[1])
         for w in args[0].split(delimiter):
-            if re.fullmatch(pattern, w, re.IGNORECASE):
+            if _safe_re("fullmatch", pattern, w, flags=_regex.IGNORECASE):
                 return w
         return ""
 
@@ -3275,9 +3332,8 @@ class SoftcodeInterpreter:
 
     # SYSTEM INFO (10)
     async def func_hostname(self, args: list, context: Dict, executor_id: Optional[int]) -> str:
-        """Server hostname"""
-        import socket
-        return socket.gethostname()
+        """Server hostname (not disclosed: would leak infrastructure details)"""
+        return "web-pennmush"
 
     async def func_port(self, args: list, context: Dict, executor_id: Optional[int]) -> int:
         """Server port"""

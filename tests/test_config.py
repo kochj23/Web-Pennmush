@@ -15,28 +15,26 @@ class TestSettings:
 
     def test_default_version(self):
         s = Settings()
-        assert s.APP_VERSION == "3.0.0"
+        assert s.APP_VERSION == "3.1.0"
 
     def test_default_host_and_port(self):
-        s = Settings()
-        assert s.HOST == "0.0.0.0"
-        assert s.PORT == 8000
+        assert Settings.model_fields["HOST"].default == "127.0.0.1"
+        assert Settings.model_fields["PORT"].default == 8000
 
     def test_default_database_url(self):
-        s = Settings()
-        assert "sqlite" in s.DATABASE_URL
-        assert "aiosqlite" in s.DATABASE_URL
+        s = Settings(DATABASE_URL="", DB_HOST="")
+        assert "sqlite+aiosqlite" in s.database_url()
+        pg = Settings(DATABASE_URL="", DB_HOST="games-pg", DB_PASSWORD="x")
+        assert pg.database_url().startswith("postgresql+asyncpg://mush:x@games-pg:5432/games")
 
     def test_debug_default_true(self):
-        s = Settings()
-        assert s.DEBUG is True
+        """Renamed intent: DEBUG now defaults to False (security finding #1)."""
+        assert Settings.model_fields["DEBUG"].default is False
 
     def test_ai_defaults(self):
-        s = Settings()
-        assert s.AI_BACKEND == "auto"
-        assert s.AI_DEFAULT_MODEL == "nova:latest"
-        assert s.OLLAMA_BASE_URL == "http://127.0.0.1:11434"
-        assert s.AI_ENABLE_GAME_GUIDE is True
+        assert Settings.model_fields["AI_BACKEND"].default == "relay"
+        assert "AI_DEFAULT_MODEL" not in Settings.model_fields  # relay picks the model, never nova*
+        assert Settings.model_fields["AI_ENABLE_GAME_GUIDE"].default is True
 
     def test_mush_defaults(self):
         s = Settings()
@@ -47,4 +45,4 @@ class TestSettings:
 
     def test_token_expiry(self):
         s = Settings()
-        assert s.ACCESS_TOKEN_EXPIRE_MINUTES == 60 * 24
+        assert s.ACCESS_TOKEN_EXPIRE_MINUTES == 60 * 12

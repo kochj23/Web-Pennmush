@@ -86,6 +86,7 @@ class CommandParser:
         # AI commands
         self.register_command("guide", self.cmd_guide, ["ai"])
         self.register_command("@ai/status", self.cmd_ai_status)
+        self.register_command("@password", self.cmd_password)
 
         # Lock commands
         self.register_command("@lock", self.cmd_lock)
@@ -786,27 +787,34 @@ class CommandParser:
         if not npc or not npc.is_active:
             return f"{npc_obj.name} is not an NPC or is not active."
 
-        # Generate AI response using local AI (Ollama or MLX)
+        # NPC line via the Nova Games LLM relay (scripted fallback when unavailable)
         from backend.engine.ai_manager import ai_manager
+        from backend.security import rate_limiter
+
+        message = message[:200]
 
         # Parse conversation history
         conversation_history = []
         if npc.conversation_history:
             try:
                 conversation_history = json.loads(npc.conversation_history)
-            except:
+            except (ValueError, TypeError):
                 conversation_history = []
 
-        # Generate response
-        ai_response = await ai_manager.generate_response(
-            prompt=message,
-            personality=npc.personality,
-            knowledge_base=npc.knowledge_base or "",
-            model=npc.ai_model,
-            temperature=npc.temperature / 10.0,  # Convert from 0-10 to 0.0-1.0
-            max_tokens=npc.max_tokens,
-            conversation_history=conversation_history
-        )
+        if not (rate_limiter.is_allowed(str(player.id), "ai") and rate_limiter.is_allowed(str(player.id), "ai_hour")):
+            ai_response = ai_manager._generate_placeholder(message, npc_obj.name)
+        else:
+            room = await self.obj_mgr.get_object(player.location_id) if player.location_id is not None else None
+            ai_response = await ai_manager.generate_response(
+                prompt=message,
+                personality=npc.personality,
+                knowledge_base=npc.knowledge_base or "",
+                conversation_history=conversation_history,
+                npc_name=npc_obj.name,
+                room_name=room.name if room else "",
+                player_name=player.name,
+                player_id=player.id,
+            )
 
         # Update conversation history (keep last 10 exchanges)
         conversation_history.append({"role": "user", "content": message})
@@ -863,20 +871,13 @@ The guide uses local AI (Ollama or MLX) if available.
             """
 
         from backend.engine.ai_manager import ai_manager
+        from backend.security import rate_limiter
 
         if not ai_manager.is_available():
-            return """AI Guide is not available. Please install a local AI backend:
-
-Option 1 - Ollama (All platforms):
-  1. Install from https://ollama.ai
-  2. Run: ollama pull llama2
-  3. Restart Web-Pennmush
-
-Option 2 - MLX (Apple Silicon only):
-  1. pip install mlx-lm
-  2. Restart Web-Pennmush
-
-Then try 'guide' again!"""
+            return "The AI guide is resting right now. Try 'help' or 'help <command>' for documentation."
+        if not (rate_limiter.is_allowed(str(player.id), "ai") and rate_limiter.is_allowed(str(player.id), "ai_hour")):
+            return "The guide needs a breather. Try again in a few minutes, or use 'help'."
+        args = args[:200]
 
         # Build game context
         room = await self.obj_mgr.get_object(player.location_id)
@@ -888,37 +889,37 @@ Then try 'guide' again!"""
         }
 
         # Get AI response
-        response = await ai_manager.get_game_guidance(args, game_context)
+        response = await ai_manager.get_game_guidance(args, game_context, player_id=player.id)
 
         return f"=== AI Guide ===\n\n{response}\n\nNeed more help? Try 'help' for command documentation."
 
     async def cmd_ai_status(self, player: DBObject, args: str) -> str:
-        """Show AI backend status"""
+        """Show AI relay status"""
         from backend.engine.ai_manager import ai_manager
 
         status = ai_manager.get_status()
-
-        output = ["=== AI Backend Status ==="]
-        output.append(f"Active Backend: {status['backend']}")
-        output.append(f"Ollama Available: {'✓ Yes' if status['ollama_available'] else '✗ No'}")
-        output.append(f"MLX Available: {'✓ Yes' if status['mlx_available'] else '✗ No (Apple Silicon only)'}")
-        output.append(f"Configured: {'✓ Yes' if status['is_configured'] else '✗ No'}")
-
-        if status['is_configured']:
-            # List available models
-            models = await ai_manager.list_available_models()
-            if models:
-                output.append(f"\nAvailable Models:")
-                for model in models[:5]:  # Show first 5
-                    output.append(f"  - {model}")
-                if len(models) > 5:
-                    output.append(f"  ... and {len(models) - 5} more")
-        else:
-            output.append("\nTo enable AI:")
-            output.append("  Option 1: Install Ollama from https://ollama.ai")
-            output.append("  Option 2: pip install mlx-lm (Apple Silicon only)")
-
+        output = ["=== AI Status ==="]
+        output.append(f"Backend: {status['backend']} (Nova Games LLM relay)")
+        output.append(f"Configured: {'Yes' if status['is_configured'] else 'No - NPCs use scripted lines'}")
+        output.append(f"Queue depth: {status['queue_depth']}")
         return "\n".join(output)
+
+    async def cmd_password(self, player: DBObject, args: str) -> str:
+        """@password <old>=<new> - change your own password"""
+        from backend.passwords import pwd_context, MIN_PASSWORD_LENGTH, MAX_PASSWORD_BYTES
+        from backend.security import rate_limiter
+        if "=" not in args:
+            return "Usage: @password <old password>=<new password>"
+        old, new = args.split("=", 1)
+        if not rate_limiter.is_allowed(str(player.id), "login_user"):
+            return "Too many attempts. Wait a few minutes."
+        if not await pwd_context.averify(old, player.password_hash or ""):
+            return "Incorrect password."
+        if len(new) < MIN_PASSWORD_LENGTH or len(new.encode("utf-8")) > MAX_PASSWORD_BYTES:
+            return f"New password must be {MIN_PASSWORD_LENGTH}-{MAX_PASSWORD_BYTES} bytes."
+        player.password_hash = await pwd_context.ahash(new)
+        await self.session.commit()
+        return "Password changed."
 
     # ==================== LOCK COMMANDS ====================
 

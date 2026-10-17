@@ -1,26 +1,102 @@
 """
 Web-Pennmush Database Connection and Initialization
 Author: Jordan Koch (GitHub: kochj23)
+
+Production runs on Postgres (asyncpg) with a bounded pool, a per-statement
+timeout and connection retry with backoff. SQLite remains for local dev/tests.
 """
+import asyncio
+import logging
+import os
 import secrets
+from pathlib import Path
+
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import NullPool, StaticPool
 from backend.models import Base, DBObject, ObjectType, Attribute, Channel, ChannelMembership, HelpTopic
 from backend.config import settings
-from passlib.context import CryptContext
+from backend.passwords import pwd_context
 from datetime import datetime
 
+log = logging.getLogger("webpennmush.db")
 
-# Password hashing
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+_SSL_KEYS = ("sslmode", "sslrootcert", "sslcert", "sslkey")
+
+
+def split_pg_url(url: str):
+    """
+    Normalise a libpq-style Postgres URL for SQLAlchemy+asyncpg.
+
+    Returns (sqlalchemy_url, ssl_arg). sslmode/sslrootcert are removed from the
+    query string and turned into an SSLContext (verify-full pins the CA and
+    checks the hostname), because SQLAlchemy passes kwargs, not the DSN.
+    """
+    from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+    import ssl
+
+    if url.startswith("postgresql://") or url.startswith("postgres://"):
+        url = "postgresql+asyncpg://" + url.split("://", 1)[1]
+    parts = urlsplit(url)
+    query = dict(parse_qsl(parts.query))
+    sslmode = query.pop("sslmode", None)
+    rootcert = query.pop("sslrootcert", None)
+    for k in _SSL_KEYS:
+        query.pop(k, None)
+    clean = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+    ssl_arg = None
+    if sslmode in ("verify-full", "verify-ca"):
+        ctx = ssl.create_default_context(cafile=rootcert) if rootcert else ssl.create_default_context()
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        ctx.check_hostname = sslmode == "verify-full"
+        ctx.verify_mode = ssl.CERT_REQUIRED
+        ssl_arg = ctx
+    elif sslmode == "require":
+        ssl_arg = "require"
+    elif sslmode == "disable":
+        ssl_arg = False
+    return clean, ssl_arg
+
+
+def build_engine(url: str):
+    """Create the async engine with backend-appropriate pool/timeout settings."""
+    if url.startswith("sqlite"):
+        in_memory = url.endswith("://") or ":memory:" in url
+        return create_async_engine(
+            url,
+            connect_args={"check_same_thread": False},
+            # A file DB gets a fresh connection per session (no event-loop affinity).
+            poolclass=StaticPool if in_memory else NullPool,
+            echo=False,
+        )
+    connect_args = {
+        "timeout": 10,
+        "command_timeout": max(1, settings.DB_STATEMENT_TIMEOUT_MS // 1000 + 1),
+        "server_settings": {
+            "statement_timeout": str(settings.DB_STATEMENT_TIMEOUT_MS),
+            "idle_in_transaction_session_timeout": "30000",
+            "application_name": "web-pennmush",
+            "search_path": settings.DB_SCHEMA,
+        },
+    }
+    url, ssl_arg = split_pg_url(url)
+    if ssl_arg is not None:
+        connect_args["ssl"] = ssl_arg
+    return create_async_engine(
+        url,
+        pool_size=settings.DB_POOL_SIZE,
+        max_overflow=settings.DB_MAX_OVERFLOW,
+        pool_timeout=settings.DB_POOL_TIMEOUT_S,
+        pool_pre_ping=True,
+        pool_recycle=1800,
+        connect_args=connect_args,
+        echo=False,
+    )
+
 
 # Create async engine
-engine = create_async_engine(
-    settings.DATABASE_URL,
-    connect_args={"check_same_thread": False} if "sqlite" in settings.DATABASE_URL else {},
-    poolclass=StaticPool if "sqlite" in settings.DATABASE_URL else None,
-    echo=settings.DEBUG
-)
+engine = build_engine(settings.database_url())
 
 # Create session factory
 AsyncSessionLocal = async_sessionmaker(
@@ -41,24 +117,82 @@ async def get_db():
             await session.close()
 
 
+async def wait_for_db(eng=None, retries: int = None, base_delay: float = 0.5, max_delay: float = 10.0):
+    """Block until the database answers SELECT 1, retrying with exponential backoff."""
+    eng = eng or engine
+    retries = settings.DB_CONNECT_RETRIES if retries is None else retries
+    delay = base_delay
+    for attempt in range(1, retries + 1):
+        try:
+            async with eng.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+            return attempt
+        except Exception as exc:  # connection refused, DNS, auth during startup...
+            if attempt >= retries:
+                raise
+            log.warning("database not ready (attempt %d/%d): %s", attempt, retries, type(exc).__name__)
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, max_delay)
+    return retries
+
+
+async def sync_sequences(eng=None):
+    """Postgres: move serial sequences past explicitly-inserted seed ids."""
+    eng = eng or engine
+    if eng.dialect.name != "postgresql":
+        return
+    async with eng.begin() as conn:
+        for table in Base.metadata.sorted_tables:
+            if "id" not in table.c:
+                continue
+            await conn.execute(text(
+                f"SELECT setval(pg_get_serial_sequence('{table.name}', 'id'), "
+                f"GREATEST((SELECT COALESCE(MAX(id), 0) FROM {table.name}), 1))"
+            ))
+
+
+def _store_god_password(password: str) -> str:
+    """Write the one-time God password to a 0600 file on the data volume (never stdout)."""
+    data_dir = Path(settings.DATA_DIR)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    path = data_dir / "initial_god_password"
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(password + "\n")
+    return str(path)
+
+
 async def init_db():
     """
     Initialize database tables and create starting rooms/objects.
     Creates the classic MUSH starting area: Room Zero (The Void).
     """
-    async with engine.begin() as conn:
-        # Create all tables
+    await wait_for_db()
+    migrate_url = settings.migrate_url()
+    ddl_engine = engine if migrate_url == settings.database_url() else build_engine(migrate_url)
+    try:
+        await _init_schema_and_seed(ddl_engine)
+    finally:
+        if ddl_engine is not engine:
+            await ddl_engine.dispose()
+
+
+async def _init_schema_and_seed(ddl_engine):
+    """create_all + world seed + sequence sync, run as the schema owner role."""
+    async with ddl_engine.begin() as conn:
+        # Create all tables (idempotent; this is the project's migration mechanism)
         await conn.run_sync(Base.metadata.create_all)
+    SeedSession = async_sessionmaker(ddl_engine, class_=AsyncSession, expire_on_commit=False)
 
     # Create initial game world if it doesn't exist
-    async with AsyncSessionLocal() as session:
+    async with SeedSession() as session:
         # Check if Room Zero exists
         result = await session.get(DBObject, 0)
         if result is None:
-            print("Creating initial game world...")
+            log.warning("Creating initial game world...")
 
             # Create God/Admin account (object #1) with random password
-            god_password = secrets.token_urlsafe(16)
+            god_password = os.environ.get("GOD_PASSWORD") or secrets.token_urlsafe(16)
             god = DBObject(
                 id=1,
                 name="One",
@@ -67,10 +201,12 @@ async def init_db():
                 description="The One. The Administrator of this MUSH.",
                 flags="GOD,WIZARD,ROYAL",
                 created_at=datetime.utcnow(),
-                location_id=0,
-                home_id=0
+                # location/home (#0) are set after Room Zero exists: Postgres enforces the FK.
+                location_id=None,
+                home_id=None
             )
             session.add(god)
+            await session.flush()
 
             # Create Room Zero - The Void (object #0)
             room_zero = DBObject(
@@ -88,6 +224,9 @@ async def init_db():
                 created_at=datetime.utcnow()
             )
             session.add(room_zero)
+            await session.flush()
+            god.location_id = 0
+            god.home_id = 0
 
             # Create Starting Room - Central Plaza (object #2)
             central_plaza = DBObject(
@@ -108,6 +247,7 @@ async def init_db():
                 created_at=datetime.utcnow()
             )
             session.add(central_plaza)
+            await session.flush()
 
             # Create exit from Room Zero to Central Plaza
             exit_zero_to_plaza = DBObject(
@@ -156,6 +296,7 @@ async def init_db():
                 created_at=datetime.utcnow()
             )
             session.add(magic_crystal)
+            await session.flush()
 
             # Add sample attribute to crystal (softcode example)
             crystal_power_attr = Attribute(
@@ -461,16 +602,18 @@ Related: help @create, help talk
                 session.add(help_topic)
 
             await session.commit()
-            print("Initial game world created successfully!")
-            print("  - Room Zero (#0): The Void")
-            print(f"  - God/Admin (#1): One (password: {god_password})")
-            print("  *** SAVE THIS PASSWORD - it will NOT be shown again ***")
-            print("  - Central Plaza (#2): Starting room")
-            print("  - Exits (#3, #4): Portal connections")
-            print("  - Magic Crystal (#5): Sample object")
-            print("  - Default Channels: Public, Newbie, Builder")
-            print(f"  - Help Topics: {len(help_topics_data)} topics loaded")
-            print("\nIMPORTANT: Change the God password after first login!")
+            if os.environ.get("GOD_PASSWORD"):
+                log.warning("Initial game world created. God (#1 'One') password = GOD_PASSWORD secret.")
+            else:
+                try:
+                    pw_file = _store_god_password(god_password)
+                    log.warning("Initial game world created. God (#1 'One') password written to %s "
+                                "(mode 0600). Change it after first login and delete the file.", pw_file)
+                except OSError:
+                    log.error("Initial game world created but the God password could not be stored; "
+                              "set GOD_PASSWORD and reset #1 with @password.")
+
+    await sync_sequences(ddl_engine)
 
 
 async def close_db():

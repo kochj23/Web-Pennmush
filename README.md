@@ -9,7 +9,7 @@
 ![Version](https://img.shields.io/badge/version-3.0.0-brightgreen)
 ![Tests](https://img.shields.io/badge/tests-358-brightgreen)
 
-A modern MUSH (Multi-User Shared Hallucination) server inspired by [PennMUSH](https://github.com/pennmush/pennmush). Built with Python, FastAPI, and WebSockets for real-time multiplayer text-based gaming. Includes a softcode interpreter, channel system, lock evaluator, mail, quests, economy, moderation, and AI-powered NPCs via local Ollama or MLX backends.
+A modern MUSH (Multi-User Shared Hallucination) server inspired by [PennMUSH](https://github.com/pennmush/pennmush). Built with Python, FastAPI, and WebSockets for real-time multiplayer text-based gaming. Includes a softcode interpreter, channel system, lock evaluator, mail, quests, economy, moderation, and AI-powered NPCs via a pull-based LLM relay (the server never calls a model itself).
 
 ---
 
@@ -50,7 +50,7 @@ graph TD
     MOD --> ORM
 
     ORM --> DB["SQLite / PostgreSQL"]
-    AI --> LLM["Local LLM - Ollama / MLX"]
+    AI --> LLM["LLM relay (pulls template jobs)"]
 ```
 
 ---
@@ -70,7 +70,7 @@ graph TD
 | **Quest System** | Multi-step quests with progress tracking, credit rewards, repeatable quests |
 | **Economy** | Credit currency, player-to-player transfers, transaction history, admin grants, leaderboard |
 | **Moderation** | Ban (permanent/temporary), kick, muzzle with audit logging |
-| **AI NPCs** | Local Ollama or MLX backends; personality and knowledge per NPC; conversation memory |
+| **AI NPCs** | Template jobs pulled by an LLM relay (HMAC-signed); scripted fallback lines; per-player quotas |
 | **AI Game Guide** | Context-aware help via `guide <question>` |
 | **Help System** | Searchable in-game docs organized by category with alias support |
 | **Room Map** | Interactive SVG graph of connected rooms with clickable nodes |
@@ -103,21 +103,12 @@ pip install -r requirements.txt
 python -m backend.main
 ```
 
-Open `http://localhost:8000`. Default admin: username `One`, password `potrzebie`. Change the password immediately.
+For local development `REGISTRATION_MODE=open` is convenient (`echo REGISTRATION_MODE=open > .env`).
+Open `http://127.0.0.1:8000`. The admin account is `One`; its password is `GOD_PASSWORD` if set, otherwise a random one written once to `data/initial_god_password` (mode 0600, never printed). Change it in game with `@password <old>=<new>`.
 
-### AI Setup (Optional)
+### AI (optional)
 
-**Ollama (all platforms):**
-```bash
-ollama pull llama2
-python -m backend.main
-```
-
-**MLX (Apple Silicon):**
-```bash
-pip install mlx-lm
-python -m backend.main
-```
+NPC lines and the `guide` come from the Nova Games LLM relay, which pulls jobs from `GET /relay/jobs` (HMAC-signed with `RELAY_SECRET_MUSH`). Without the relay, NPCs answer with scripted lines.
 
 Verify in-game: `@ai/status` and `guide How do I build?`
 
@@ -142,16 +133,19 @@ Verify in-game: `@ai/status` and `guide How do I build?`
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/players/register` | POST | Create account |
-| `/api/players` | GET | List players |
-| `/api/players/{id}` | GET | Player info |
-| `/api/objects/{id}` | GET | Object info |
-| `/api/rooms/{id}/contents` | GET | Room contents |
-| `/api/rooms/map` | GET | Room graph data |
-| `/api/stats` | GET | Server statistics |
-| `/health` | GET | Health check |
+| `/api/auth/login` | POST | Password login; sets an HttpOnly session cookie and returns a token |
+| `/api/auth/logout` | POST | Clear the session cookie |
+| `/api/auth/me` | GET | Current player (session required) |
+| `/api/players/register` | POST | Create account (invite code / admin approval, rate limited) |
+| `/api/players` | GET | Connected players (session); all accounts for admins |
+| `/api/players/{id}` | GET | Player info (session) |
+| `/api/objects/{id}` | GET | Objects you can see (session) |
+| `/api/rooms/{id}/contents` | GET | Your current room (session; any room for admins) |
+| `/api/rooms/map` | GET | Room graph around you (session) |
+| `/api/stats`, `/api/admin/*` | GET/POST | Admin only (GOD/WIZARD/ROYAL) |
+| `/healthz` | GET | Health check |
 
-WebSocket: `ws://localhost:8000/ws` -- send `{"type": "command", "command": "look"}`.
+WebSocket: `/ws` -- first frame `{"type": "auth", "token": "..."}`, then `{"type": "command", "command": "look"}`.
 
 ---
 
@@ -161,13 +155,13 @@ All settings via environment variables, `.env` file, or `backend/config.py`:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `HOST` | `0.0.0.0` | Bind address |
+| `HOST` | `127.0.0.1` (container: `0.0.0.0`) | Bind address |
 | `PORT` | `8000` | Server port |
-| `DATABASE_URL` | `sqlite+aiosqlite:///./webpennmush.db` | Database |
-| `SECRET_KEY` | (change in production) | JWT signing |
-| `AI_BACKEND` | `auto` | auto, ollama, mlx, none |
-| `AI_DEFAULT_MODEL` | `nova:latest` | LLM for NPCs/guide |
-| `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Ollama URL |
+| `DATABASE_URL` | SQLite file (dev) | Postgres in production (`postgresql://...?sslmode=verify-full&sslrootcert=...`) |
+| `DATABASE_MIGRATE_URL` | = `DATABASE_URL` | Schema-owner role for create_all |
+| `SECRET_KEY` | none (required) | Session signing |
+| `REGISTRATION_MODE` | `approval` | `invite`, `approval`, `closed`, `open` (dev) |
+| `RELAY_SECRET_MUSH` | none | Enables the LLM relay endpoints |
 | `IDLE_TIMEOUT_MINUTES` | `30` | Session timeout |
 | `MAX_COMMAND_LENGTH` | `8192` | Input limit |
 
@@ -175,7 +169,7 @@ All settings via environment variables, `.env` file, or `backend/config.py`:
 
 ## Database
 
-SQLite for development, PostgreSQL for production. Auto-seeds on first run with Room Zero, admin account "One", Central Plaza, portal exits, and a sample object.
+PostgreSQL in production (bounded pool, statement timeout, startup retry with backoff); SQLite only for local development and unit tests. Auto-seeds on first run with Room Zero, admin account "One", Central Plaza, portal exits, and a sample object.
 
 ```bash
 # PostgreSQL
@@ -208,15 +202,15 @@ pip install asyncpg
 | **Total** | | **358** | |
 
 ```bash
-pip install pytest pytest-asyncio httpx
-python -m pytest tests/ -v
+pip install -r requirements-dev.txt
+python -m pytest
 ```
 
 ---
 
 ## Production
 
-Set `SECRET_KEY`, change default password, `DEBUG=False`, use PostgreSQL, terminate TLS upstream. Dependencies: FastAPI 0.109, uvicorn, SQLAlchemy 2.0, aiosqlite, passlib, pydantic 2.5, ollama, mlx-lm, httpx. See [requirements.txt](requirements.txt). ~12,400 lines of Python backend, vanilla HTML/CSS/JS frontend.
+See [docs/DEPLOYMENT_AND_SECURITY.md](docs/DEPLOYMENT_AND_SECURITY.md) and the `Dockerfile` (non-root, read-only rootfs, health check). Dependencies are pinned in [requirements.txt](requirements.txt) and checked with `pip-audit`. ~12,400 lines of Python backend, vanilla HTML/CSS/JS frontend.
 
 ---
 

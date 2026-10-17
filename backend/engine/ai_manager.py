@@ -2,301 +2,131 @@
 Web-Pennmush AI Manager
 Author: Jordan Koch (GitHub: kochj23)
 
-Manages local AI integration with Ollama and MLX for intelligent NPCs and game guidance.
+NPC dialogue via the Nova Games LLM relay (template `mush.npc`). The server
+never talks to Ollama/MLX/Nova directly: it enqueues a template job that the
+relay pulls (see backend/relay.py). Every failure path - relay not configured,
+queue full, timeout, quota, relay fallback - degrades to a scripted line.
 """
-from typing import Optional, List, Dict, Any
+import random
 from enum import Enum
-import json
-import asyncio
-import platform
+from typing import Any, Dict, List, Optional
+
+from backend.relay import RelayJobQueue
 
 
 class AIBackend(str, Enum):
     """Available AI backends"""
-    OLLAMA = "ollama"
-    MLX = "mlx"
+    RELAY = "relay"
     NONE = "none"
 
 
+NPC_MAX_TOKENS = 150
+
+# Contract var caps for template mush.npc
+_CAPS = {"npc_name": 40, "npc_description": 400, "room_name": 80, "player_name": 40, "player_says": 200}
+
+
+def _clip(value: Any, limit: int) -> str:
+    text = "" if value is None else str(value)
+    text = "".join(ch for ch in text if ch == "\n" or ch >= " ")
+    return text[:limit]
+
+
 class AIManager:
-    """
-    Manages AI interactions using local models (Ollama, MLX).
-    Automatically detects available backends and uses the best one.
-    """
+    """Builds bounded relay jobs for NPC lines and supplies scripted fallbacks."""
 
-    def __init__(self):
-        self.backend = AIBackend.NONE
-        self.ollama_available = False
-        self.mlx_available = False
+    def __init__(self, queue: Optional[RelayJobQueue] = None):
         from backend.config import settings
-        self.ollama_base_url = settings.OLLAMA_BASE_URL
-        self.default_model = settings.AI_DEFAULT_MODEL
-        self._detect_backends()
+        self.settings = settings
+        self.queue = queue or RelayJobQueue(max_pending=settings.AI_MAX_PENDING)
+        self.backend = AIBackend.RELAY if settings.AI_BACKEND == "relay" else AIBackend.NONE
 
-    def _detect_backends(self):
-        """Detect which AI backends are available"""
-        # Check for Ollama
-        try:
-            import ollama
-            self.ollama_available = True
-            self.backend = AIBackend.OLLAMA
-            print("✓ Ollama detected and available")
-        except ImportError:
-            print("✗ Ollama not installed (pip install ollama)")
+    # ---------------- relay plumbing ----------------
 
-        # Check for MLX (only on Apple Silicon)
-        if platform.system() == "Darwin" and platform.machine() == "arm64":
-            try:
-                import mlx.core as mx
-                from mlx_lm import load, generate
-                self.mlx_available = True
-                if self.backend == AIBackend.NONE:
-                    self.backend = AIBackend.MLX
-                print("✓ MLX detected and available (Apple Silicon)")
-            except ImportError:
-                print("✗ MLX not installed (pip install mlx-lm)")
-        else:
-            print("ℹ MLX only available on Apple Silicon")
-
-        if self.backend == AIBackend.NONE:
-            print("⚠ No AI backend available. NPCs will use placeholder responses.")
-            print("  Install Ollama: https://ollama.ai")
-            print("  Or install MLX (Apple Silicon): pip install mlx-lm")
-
-    async def generate_response(
-        self,
-        prompt: str,
-        personality: str = "helpful assistant",
-        knowledge_base: str = "",
-        model: str = None,
-        temperature: float = 0.7,
-        max_tokens: int = 150,
-        conversation_history: Optional[List[Dict[str, str]]] = None
-    ) -> str:
-        """
-        Generate an AI response using available backend.
-
-        Args:
-            prompt: The user's input/question
-            personality: NPC personality description
-            knowledge_base: Context/knowledge the NPC has
-            model: Model name (for Ollama: llama2, mistral, etc.)
-            temperature: Response randomness (0-1)
-            max_tokens: Maximum response length
-            conversation_history: Previous messages in conversation
-
-        Returns:
-            Generated response text
-        """
-        model = model or self.default_model
-        if self.backend == AIBackend.OLLAMA:
-            return await self._generate_ollama(
-                prompt, personality, knowledge_base, model,
-                temperature, max_tokens, conversation_history
-            )
-        elif self.backend == AIBackend.MLX:
-            return await self._generate_mlx(
-                prompt, personality, knowledge_base, model,
-                temperature, max_tokens, conversation_history
-            )
-        else:
-            return self._generate_placeholder(prompt, personality)
-
-    async def _generate_ollama(
-        self,
-        prompt: str,
-        personality: str,
-        knowledge_base: str,
-        model: str,
-        temperature: float,
-        max_tokens: int,
-        conversation_history: Optional[List[Dict[str, str]]]
-    ) -> str:
-        """Generate response using Ollama"""
-        try:
-            from ollama import Client
-            client = Client(host=self.ollama_base_url)
-
-            # Build system message
-            system_message = f"You are {personality}."
-            if knowledge_base:
-                system_message += f"\n\nYour knowledge: {knowledge_base}"
-            system_message += "\n\nYou are a character in a text-based multiplayer game (MUSH). Keep responses brief (1-3 sentences) and in-character. Be engaging and helpful to players."
-
-            # Build messages
-            messages = [{"role": "system", "content": system_message}]
-
-            # Add conversation history
-            if conversation_history:
-                for msg in conversation_history[-5:]:  # Last 5 messages
-                    messages.append(msg)
-
-            # Add current prompt
-            messages.append({"role": "user", "content": prompt})
-
-            # Generate response (async)
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: client.chat(
-                    model=model,
-                    messages=messages,
-                    options={
-                        "temperature": temperature,
-                        "num_predict": max_tokens,
-                    }
-                )
-            )
-
-            return response['message']['content'].strip()
-
-        except Exception as e:
-            print(f"Ollama error: {e}")
-            return self._generate_placeholder(prompt, personality)
-
-    async def _generate_mlx(
-        self,
-        prompt: str,
-        personality: str,
-        knowledge_base: str,
-        model: str,
-        temperature: float,
-        max_tokens: int,
-        conversation_history: Optional[List[Dict[str, str]]]
-    ) -> str:
-        """Generate response using MLX (Apple Silicon)"""
-        try:
-            from mlx_lm import load, generate
-
-            # Build prompt with personality and context
-            full_prompt = f"You are {personality}."
-            if knowledge_base:
-                full_prompt += f" {knowledge_base}"
-            full_prompt += f"\n\nPlayer: {prompt}\nYou (stay in character, 1-3 sentences):"
-
-            # Load model (use a small model for speed)
-            # Common MLX-compatible models: mlx-community/Llama-2-7b-chat-mlx
-            model_path = f"mlx-community/{model}-mlx" if "mlx" not in model else model
-
-            # Generate (async)
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: generate(
-                    load(model_path),
-                    full_prompt,
-                    max_tokens=max_tokens,
-                    temp=temperature
-                )
-            )
-
-            # Extract response after the prompt
-            if response:
-                # MLX returns full text including prompt, extract just the response
-                lines = response.split('\n')
-                for line in lines:
-                    if line.strip() and not line.startswith("You are") and not line.startswith("Player:"):
-                        return line.strip()
-
-            return response.strip() if response else self._generate_placeholder(prompt, personality)
-
-        except Exception as e:
-            print(f"MLX error: {e}")
-            return self._generate_placeholder(prompt, personality)
-
-    def _generate_placeholder(self, prompt: str, personality: str) -> str:
-        """Generate a placeholder response when no AI backend is available"""
-        responses = [
-            f"As {personality}, I acknowledge your message: '{prompt[:50]}...'",
-            f"I heard you say something about '{prompt[:30]}...'. [AI not configured]",
-            f"Interesting. Tell me more about that. [Local AI not available]",
-            f"I appreciate you talking to me, though I must confess my AI isn't fully configured yet.",
-            f"That's a fascinating question about '{prompt[:40]}...'. [Install Ollama for full AI responses]",
-        ]
-        import random
-        return random.choice(responses)
-
-    async def get_game_guidance(
-        self,
-        player_query: str,
-        game_context: Dict[str, Any],
-        model: str = None
-    ) -> str:
-        """
-        Provide AI-powered game guidance to players.
-
-        Args:
-            player_query: The player's question
-            game_context: Current game state (location, inventory, etc.)
-            model: AI model to use
-
-        Returns:
-            Helpful guidance response
-        """
-        # Build context
-        context = f"""You are a helpful game guide for Web-Pennmush, a text-based multiplayer game.
-
-Current player context:
-- Location: {game_context.get('location', 'unknown')}
-- Inventory: {game_context.get('inventory', 'empty')}
-- Available commands: look, examine, say, pose, go, get, drop, inventory, who, help, channel/list, @create, @dig, @open
-
-Player question: {player_query}
-
-Provide a brief, helpful response (2-3 sentences). If it's about commands, explain what they do. If it's about the game world, be creative but helpful."""
-
-        model = model or self.default_model
-        messages = [{"role": "user", "content": context}]
-
-        try:
-            if self.backend == AIBackend.OLLAMA:
-                from ollama import Client
-                client = Client(host=self.ollama_base_url)
-                loop = asyncio.get_event_loop()
-                response = await loop.run_in_executor(
-                    None,
-                    lambda: client.chat(
-                        model=model,
-                        messages=messages,
-                        options={"temperature": 0.7, "num_predict": 150}
-                    )
-                )
-                return response['message']['content'].strip()
-            else:
-                return "Game guidance AI is not configured. Try 'help' for command documentation."
-        except Exception as e:
-            print(f"Game guidance error: {e}")
-            return "I'm having trouble accessing my guidance systems. Try 'help [command]' for specific information."
+    def relay_secret(self) -> str:
+        return self.settings.RELAY_SECRET_MUSH if self.backend == AIBackend.RELAY else ""
 
     def is_available(self) -> bool:
-        """Check if any AI backend is available"""
-        return self.backend != AIBackend.NONE
+        """True when a relay secret is configured (the relay may still be down)."""
+        return bool(self.relay_secret())
 
     def get_status(self) -> Dict[str, Any]:
-        """Get AI backend status"""
         return {
-            "backend": self.backend.value,
-            "ollama_available": self.ollama_available,
-            "mlx_available": self.mlx_available,
-            "is_configured": self.is_available()
+            "backend": self.backend.value if self.is_available() else AIBackend.NONE.value,
+            "relay_configured": self.is_available(),
+            "queue_depth": self.queue.depth,
+            "stats": dict(self.queue.stats),
+            "is_configured": self.is_available(),
         }
 
+    @staticmethod
+    def build_npc_vars(npc_name: str, npc_description: str, room_name: str, player_name: str,
+                       player_says: str, history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
+        """Template vars for mush.npc, clipped to the contract caps."""
+        hist = []
+        for item in (history or [])[-5:]:
+            hist.append({"speaker": _clip(item.get("speaker", ""), 40), "text": _clip(item.get("text", ""), 200)})
+        return {
+            "npc_name": _clip(npc_name, _CAPS["npc_name"]),
+            "npc_description": _clip(npc_description, _CAPS["npc_description"]),
+            "room_name": _clip(room_name, _CAPS["room_name"]),
+            "player_name": _clip(player_name, _CAPS["player_name"]),
+            "player_says": _clip(player_says, _CAPS["player_says"]),
+            "history": hist,
+        }
+
+    async def npc_line(self, player_id: int, vars: Dict[str, Any]) -> str:
+        """One NPC line from the relay, or a scripted fallback."""
+        if not self.is_available():
+            return self._generate_placeholder(vars.get("player_says", ""), vars.get("npc_name", "someone"))
+        result = await self.queue.submit("mush.npc", vars, f"mush-{player_id}", NPC_MAX_TOKENS,
+                                         timeout=self.settings.AI_RESULT_TIMEOUT_S)
+        text = (result or {}).get("text") or ""
+        status = (result or {}).get("status")
+        if status in ("ok", "fallback") and text.strip():
+            return text.strip()[:600]
+        return self._generate_placeholder(vars.get("player_says", ""), vars.get("npc_name", "someone"))
+
+    async def generate_response(self, prompt: str, personality: str = "a friendly local", knowledge_base: str = "",
+                                model: str = None, temperature: float = 0.7, max_tokens: int = 150,
+                                conversation_history: Optional[List[Dict[str, str]]] = None,
+                                npc_name: str = "Someone", room_name: str = "", player_name: str = "",
+                                player_id: int = 0) -> str:
+        """Backward-compatible entry point (model/temperature are decided by the relay)."""
+        history = []
+        for msg in (conversation_history or [])[-5:]:
+            speaker = player_name or "Player" if msg.get("role") == "user" else npc_name
+            history.append({"speaker": speaker, "text": msg.get("content", "")})
+        desc = personality if not knowledge_base else f"{personality}. {knowledge_base}"
+        vars = self.build_npc_vars(npc_name, desc, room_name, player_name or "Player", prompt, history)
+        return await self.npc_line(player_id, vars)
+
+    def _generate_placeholder(self, prompt: str, personality: str) -> str:
+        """Scripted line used whenever the relay can't answer."""
+        responses = [
+            "Hmm. Give me a moment to think on that.",
+            "The fog in my head is thick today. Ask me again later?",
+            "Interesting. Tell me more about that.",
+            "I've heard rumours, but nothing I'd stake my reputation on.",
+            "Ah, a question for the ages. Perhaps the Plaza notice board knows.",
+        ]
+        return random.choice(responses)
+
+    async def get_game_guidance(self, player_query: str, game_context: Dict[str, Any], model: str = None,
+                                player_id: int = 0) -> str:
+        """The in-game guide speaks through the same NPC template."""
+        vars = self.build_npc_vars(
+            "The Guide",
+            "A patient, helpful guide to Web-Pennmush. Explains commands like look, say, pose, go, get, drop, "
+            "inventory, who, help, channel/list, @create, @dig and @open in 2-3 sentences.",
+            str(game_context.get("location", "unknown")), "Player", player_query, [])
+        if not self.is_available():
+            return "The guide is resting. Try 'help' or 'help <command>' for documentation."
+        return await self.npc_line(player_id, vars)
+
     async def list_available_models(self) -> List[str]:
-        """List available AI models"""
-        if self.backend == AIBackend.OLLAMA:
-            try:
-                from ollama import Client
-                client = Client(host=self.ollama_base_url)
-                loop = asyncio.get_event_loop()
-                models = await loop.run_in_executor(None, client.list)
-                return [m['name'] for m in models.get('models', [])]
-            except Exception as e:
-                print(f"Error listing Ollama models: {e}")
-                return []
-        elif self.backend == AIBackend.MLX:
-            return ["Llama-2-7b-chat", "mistral-7b", "phi-2"]
-        else:
-            return []
+        """Models are chosen by the relay; the game does not pick them."""
+        return []
 
 
 # Global AI manager instance

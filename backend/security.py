@@ -6,126 +6,98 @@ Security utilities including rate limiting, input validation, and protection.
 """
 from typing import Optional, Dict
 from datetime import datetime, timedelta
-from collections import defaultdict
-import json
-import os
-import re
+from collections import OrderedDict, deque
 import html
+import re
+import time
 
 
 class RateLimiter:
     """
-    Rate limiter with JSON file persistence so state survives restarts.
+    In-memory sliding-window rate limiter.
+
+    Previously this persisted to a JSON file on every call (a synchronous disk
+    write per command - a DoS amplifier). State is now process memory only:
+    a restart clears it, which is acceptable because the proxy and the
+    per-IP connection caps bound abuse anyway. Memory is bounded by MAX_KEYS
+    (oldest-touched keys are evicted first).
     """
 
+    MAX_KEYS = 50000
+
     def __init__(self, persist_path: Optional[str] = None):
-        # Store: {key: [iso_timestamp, ...]}
-        self.requests: Dict[str, list] = defaultdict(list)
+        # persist_path is accepted for backward compatibility and ignored.
+        self.requests: "OrderedDict[str, deque]" = OrderedDict()
         self.limits = {
-            "login": (5, 60),  # 5 attempts per 60 seconds
+            "login": (5, 60),  # 5 attempts per 60 seconds (legacy key)
+            "login_ip": (20, 600),  # 20 login attempts per IP per 10 min
+            "login_user": (10, 600),  # 10 attempts per account per 10 min
+            "register_ip": (3, 3600),  # 3 registrations per IP per hour
+            "ws_connect_ip": (20, 60),  # 20 WebSocket handshakes per IP per minute
             "command": (30, 60),  # 30 commands per 60 seconds
             "api": (100, 60),  # 100 API requests per 60 seconds
             "channel": (10, 60),  # 10 channel messages per 60 seconds
             "ai": (5, 60),  # 5 AI requests per 60 seconds
+            "ai_hour": (20, 3600),  # 20 NPC lines per player per hour
         }
-        self._persist_path = persist_path or os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), ".rate_limit_state.json"
-        )
-        self._load_state()
 
-    def _load_state(self):
-        """Load persisted rate limit state from disk."""
-        try:
-            if os.path.exists(self._persist_path):
-                with open(self._persist_path, "r") as f:
-                    data = json.load(f)
-                now = datetime.utcnow()
-                for identifier, timestamps in data.items():
-                    # Parse ISO timestamps and discard anything older than the
-                    # longest window (60 seconds for all current limits)
-                    parsed = []
-                    for ts in timestamps:
-                        try:
-                            dt = datetime.fromisoformat(ts)
-                            if (now - dt).total_seconds() < 120:  # generous buffer
-                                parsed.append(dt)
-                        except (ValueError, TypeError):
-                            continue
-                    if parsed:
-                        self.requests[identifier] = parsed
-        except (json.JSONDecodeError, OSError):
-            # Corrupted or unreadable file, start fresh
-            self.requests = defaultdict(list)
+    @staticmethod
+    def _now() -> float:
+        return time.monotonic()
 
-    def _save_state(self):
-        """Persist current rate limit state to disk."""
-        try:
-            serializable = {}
-            for identifier, timestamps in self.requests.items():
-                serializable[identifier] = [dt.isoformat() for dt in timestamps]
-            with open(self._persist_path, "w") as f:
-                json.dump(serializable, f)
-        except OSError:
-            pass  # Best effort persistence
+    def _window(self, identifier: str, window_seconds: float, now: float) -> deque:
+        q = self.requests.get(identifier)
+        if q is None:
+            q = deque()
+            self.requests[identifier] = q
+            if len(self.requests) > self.MAX_KEYS:
+                self.requests.popitem(last=False)
+        else:
+            self.requests.move_to_end(identifier)
+        cutoff = now - window_seconds
+        while q and q[0] <= cutoff:
+            q.popleft()
+        return q
 
     def is_allowed(self, key: str, limit_type: str = "command") -> bool:
         """
-        Check if request is allowed under rate limit.
+        Check if request is allowed under rate limit (and record it if so).
 
         Args:
             key: Identifier (player_id, IP address, etc.)
-            limit_type: Type of limit (login, command, api, channel, ai)
+            limit_type: Type of limit (see self.limits)
 
         Returns:
             True if allowed, False if rate limit exceeded
         """
         if limit_type not in self.limits:
             return True
-
         max_requests, window_seconds = self.limits[limit_type]
-        now = datetime.utcnow()
-        window_start = now - timedelta(seconds=window_seconds)
-
-        # Clean old requests
-        identifier = f"{limit_type}:{key}"
-        self.requests[identifier] = [
-            req_time for req_time in self.requests[identifier]
-            if req_time > window_start
-        ]
-
-        # Check if under limit
-        if len(self.requests[identifier]) >= max_requests:
-            self._save_state()
+        now = self._now()
+        q = self._window(f"{limit_type}:{key}", window_seconds, now)
+        if len(q) >= max_requests:
             return False
-
-        # Add current request
-        self.requests[identifier].append(now)
-        self._save_state()
+        q.append(now)
         return True
 
     def get_remaining(self, key: str, limit_type: str = "command") -> int:
         """Get remaining requests in current window"""
         if limit_type not in self.limits:
             return 999
-
         max_requests, window_seconds = self.limits[limit_type]
         identifier = f"{limit_type}:{key}"
-        now = datetime.utcnow()
-        window_start = now - timedelta(seconds=window_seconds)
-
-        # Count recent requests
-        recent = [
-            req_time for req_time in self.requests[identifier]
-            if req_time > window_start
-        ]
-        return max(0, max_requests - len(recent))
+        if identifier not in self.requests:
+            return max_requests
+        q = self._window(identifier, window_seconds, self._now())
+        return max(0, max_requests - len(q))
 
     def reset(self, key: str, limit_type: str = "command"):
         """Reset rate limit for a key"""
-        identifier = f"{limit_type}:{key}"
-        if identifier in self.requests:
-            del self.requests[identifier]
-        self._save_state()
+        self.requests.pop(f"{limit_type}:{key}", None)
+
+    def clear(self):
+        """Drop all state (tests / admin)."""
+        self.requests.clear()
 
 
 class InputValidator:

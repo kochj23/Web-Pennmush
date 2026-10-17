@@ -76,3 +76,4 @@ DerivedData/
 .build/
 *.xcuserstate
 xcuserdata/
+tests/.data/

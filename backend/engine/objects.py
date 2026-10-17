@@ -37,6 +37,16 @@ class ObjectManager:
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
 
+    async def get_player_by_exact_name(self, name: str) -> Optional[DBObject]:
+        """Exact, case-insensitive player lookup (used for login/registration)."""
+        from sqlalchemy import func as sa_func
+        query = select(DBObject).where(
+            DBObject.type == ObjectType.PLAYER,
+            sa_func.lower(DBObject.name) == name.lower(),
+        ).limit(1)
+        result = await self.session.execute(query)
+        return result.scalars().first()
+
     async def create_object(
         self,
         name: str,

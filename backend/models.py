@@ -84,6 +84,9 @@ class DBObject(Base):
     email = Column(String(255), nullable=True)
     last_login = Column(DateTime, nullable=True)
     is_connected = Column(Boolean, default=False)
+    # Data hook: optional link from a MUSH character to a Nova Games site account
+    # (opaque account id from /api/saves). Unused by game logic; see docs/SITE_ACCOUNTS.md.
+    site_account_id = Column(String(64), nullable=True, index=True)
 
     # Exit-specific fields
     alias = Column(String(255), nullable=True)  # Exit aliases (north;n;go north)

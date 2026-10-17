@@ -524,3 +524,65 @@ kbd {
         order: 1;
     }
 }
+
+/* ---- Admin dashboard (moved from inline <style> for strict CSP) ---- */
+.dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 1rem;
+    padding: 1rem;
+}
+.dashboard-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 1.5rem;
+}
+.dashboard-card h2 {
+    color: var(--text-accent);
+    margin-bottom: 1rem;
+    font-size: 1.2rem;
+}
+.stat-value {
+    font-size: 2.5rem;
+    color: var(--text-accent);
+    font-weight: bold;
+}
+.stat-label {
+    color: var(--text-secondary);
+    margin-top: 0.5rem;
+}
+.action-button {
+    background: var(--text-accent);
+    color: var(--bg-primary);
+    border: none;
+    padding: 0.5rem 1rem;
+    border-radius: 4px;
+    cursor: pointer;
+    margin: 0.25rem;
+}
+.danger-button {
+    background: var(--error-color);
+}
+.table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 1rem;
+}
+.table th, .table td {
+    padding: 0.5rem;
+    text-align: left;
+    border-bottom: 1px solid var(--border-color);
+}
+.table th {
+    color: var(--text-accent);
+}
+    
+.stat-row { margin-top: 1rem; }
+.wide-card { grid-column: 1 / -1; }
+.back-link { color: var(--text-accent); text-decoration: none; margin-left: 2rem; }
+.map-refresh {
+    width: 100%; margin-top: 0.5rem; padding: 0.5rem; background: var(--bg-tertiary);
+    border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 4px; cursor: pointer;
+}
+.map-error { padding: 1rem; color: var(--error-color); text-align: center; }
