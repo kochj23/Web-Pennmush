@@ -6,7 +6,7 @@ A web-based MUSH server inspired by [PennMUSH](https://github.com/pennmush/pennm
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.12-blue)
 ![Version](https://img.shields.io/badge/version-3.1.0-brightgreen)
-![Tests](https://img.shields.io/badge/tests-457%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-484%20passed-brightgreen)
 
 It runs as the `mush` service of the Nova Games platform on nova-core3 and is served at **https://192.168.1.5:8443/mush/** (LAN only). NPC dialogue comes from a local LLM, but the server never calls a model itself. It queues fixed-template jobs that the Nova Games relay pulls, and when the relay is down it answers at once with a scripted line.
 
@@ -28,6 +28,7 @@ Author: Jordan Koch ([kochj23](https://github.com/kochj23)). Personal project, M
 - [Security model](#security-model)
 - [Deployment (nova-core3)](#deployment-nova-core3)
 - [Postgres (Games DB)](#postgres-games-db)
+- [Play history](#play-history)
 - [TLS](#tls)
 - [Configuration](#configuration)
 - [Local development](#local-development)
@@ -498,6 +499,26 @@ How the app uses them (`backend/database.py`):
 
 ---
 
+## Play history
+
+Every authenticated WebSocket session is recorded in the platform's shared `play` schema (Nova Games `deploy/db/play.sql`), which Nova's game reporter reads to write about what was played. The tables belong to the platform (`play_owner`). The app never creates them and they are not in `Base.metadata`; the `mush` role has `SELECT, INSERT, UPDATE` on them, and row-level security limits it to rows whose `writer` is `mush` (the column defaults to `current_user` and the app never sets it). Code: `backend/play_log.py`.
+
+| When | What is written |
+|---|---|
+| Successful WebSocket auth | `play.sessions` row: client-generated UUID, game `mush`, client `web`, player = character name, `started_at = last_seen_at = now` |
+| Player enters a room (any move of a player into a room, via `ObjectManager.move_object`) | event `room` `{room}` |
+| `start_quest` (new progress only) / `advance_quest` | event `quest` `{action: started, quest}`, `{action: advanced, quest, step}` or `{action: completed, quest}` |
+| `add_credits` / `remove_credits` (transfers log both sides) | event `credits` `{amount, reason}`: positive earned, negative spent, reason = transaction type |
+| `say`, `pose`, `page` | counted only. The text of what anyone says or pages is never stored |
+| Each command | `actions` +1 in memory; `last_seen_at` / `actions` written at most every 30 s |
+| Disconnect (`finally` of the socket handler) | `ended_at`, outcome `quit` (`reconnected` when a newer login replaced the socket) and the summary. App shutdown ends any open sessions the same way |
+
+Summary keys: `character, duration_s, commands, start_room, end_room, rooms_entered, unique_rooms, rooms_visited` (first 50 distinct), `quests_started, quests_completed` (50 each), `quest_steps, credits_earned, credits_spent, credits_delta, says, poses, pages, outcome`, and `events_dropped` when a cap was hit. At most 300 events per session; names are cut to 120 characters.
+
+Logging never blocks or breaks a command. Hooks only update memory. One background task per session writes the session upsert (`ON CONFLICT (id) ... WHERE ended_at IS NULL`, so ended sessions stay immutable) and its pending events (`ON CONFLICT (session_id, seq) DO NOTHING`) on its own short pooled connection, bounded by a 5 s timeout. On failure the events are kept (newest 200) and resent with the next write; the final write retries 3 times with backoff. Errors are logged as warnings and swallowed. On SQLite (development and most tests) nothing is written.
+
+---
+
 ## TLS
 
 | Hop | Protection |
@@ -614,12 +635,12 @@ pip install -r requirements-dev.txt
 python -m pytest              # or: python -m pytest -q
 ```
 
-Current result: **457 passed** (verified 2026-10-17).
+Current result: **484 passed** (verified 2026-10-18).
 
 - Configuration: `pytest.ini` sets `asyncio_mode = auto`, `testpaths = tests`, and a 60 s per-test timeout (thread method).
 - `tests/conftest.py` sets `BCRYPT_ROUNDS=4`, `REGISTRATION_MODE=open`, a throwaway SQLite file DB under `tests/.data`, and test-only `SECRET_KEY` and `GOD_PASSWORD` values. Most tests use an in-memory SQLite engine. The process-wide rate limiter is cleared around every test.
-- Postgres integration tests (`tests/test_hardening.py`, via `tests/pg_cluster.py`) use `PG_TEST_URL` / `PG_TEST_MIGRATE_URL` if set. Otherwise they `initdb` a private cluster in a temp directory on a free loopback port, with SCRAM auth and the production role layout (`mush_owner` owns schema `mush`, `mush` gets DML only), and tear it down afterwards. That needs `initdb`, `pg_ctl` and `psql` on `PATH` (Homebrew `postgresql@17` on the Mac; CI installs Ubuntu's `postgresql` and adds its `bin` directory to `PATH`). Without them those tests are skipped. They never touch any other Postgres.
-- Coverage areas: models, objects, commands, locks, channels, mail and pages, quests and economy, moderation, REST API, security (validation, rate limits, credential scanning), auth bypass, hardening (Origin, caps, frame limits, relay signing and fallback, softcode budget, Postgres TLS URL handling, real-Postgres seed and roles), and integration.
+- Postgres integration tests (`tests/test_hardening.py`, via `tests/pg_cluster.py`) use `PG_TEST_URL` / `PG_TEST_MIGRATE_URL` if set. Otherwise they `initdb` a private cluster in a temp directory on a free loopback port, with SCRAM auth and the production role layout (`mush_owner` owns schema `mush`, `mush` gets DML only), and tear it down afterwards. `tests/test_play_log.py` also creates the platform `play` schema in that private cluster (from `../NovaGames/deploy/db/play.sql` when that checkout exists, else the vendored copy `tests/play_schema.sql`, which a test keeps in sync), so its Postgres tests need the private cluster rather than `PG_TEST_URL`. That needs `initdb`, `pg_ctl` and `psql` on `PATH` (Homebrew `postgresql@17` on the Mac; CI installs Ubuntu's `postgresql` and adds its `bin` directory to `PATH`). Without them those tests are skipped. They never touch any other Postgres.
+- Coverage areas: models, objects, commands, locks, channels, mail and pages, quests and economy, moderation, REST API, security (validation, rate limits, credential scanning), auth bypass, hardening (Origin, caps, frame limits, relay signing and fallback, softcode budget, Postgres TLS URL handling, real-Postgres seed and roles), play history (`tests/test_play_log.py`: Security, Performance, Retry, Unit, Integration on real Postgres with row-level security, Functional over the WebSocket, Frame), and integration.
 - CI (`.github/workflows/build.yml`) runs on pushes and PRs to main: Python 3.12, Postgres binaries, `python -m pytest -q`, then `pip-audit -r requirements.txt`.
 
 ---
@@ -650,6 +671,7 @@ Web-Pennmush/
     database.py          Engine (Postgres TLS / SQLite), retry, create_all, seed, sequence sync
     models.py            SQLAlchemy models (objects, attributes, locks, mail, channels, ...)
     relay.py             Relay HMAC sign/verify, RelayJobQueue, /relay router
+    play_log.py          Play-history logger (platform schema `play`, Postgres only, fire-and-forget)
     api/
       rest.py            /api routes
       websocket.py       ConnectionManager, Origin check, FrameLimiter, game socket loop

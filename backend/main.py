@@ -48,6 +48,8 @@ async def lifespan(app: FastAPI):
     status = ai_manager.get_status()
     log.info("AI: %s (relay configured: %s)", status["backend"], status["relay_configured"])
     yield
+    from backend.play_log import play_log
+    await play_log.close_all("quit")
     await close_db()
 
 

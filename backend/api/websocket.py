@@ -21,6 +21,7 @@ from backend.database import AsyncSessionLocal
 from backend.models import DBObject, ObjectType
 from backend.engine.commands import CommandParser
 from backend.engine.objects import ObjectManager
+from backend.play_log import play_log
 from backend.security import rate_limiter, input_validator, security_logger
 
 log = logging.getLogger("webpennmush.ws")
@@ -274,6 +275,7 @@ async def handle_websocket(websocket: WebSocket):
         return
 
     player_id = None
+    play = None
     try:
         await websocket.accept()
         await websocket.send_json({"type": "auth_required", "message": "Please authenticate"})
@@ -299,6 +301,8 @@ async def handle_websocket(websocket: WebSocket):
         async with AsyncSessionLocal() as session:
             fresh = await session.get(DBObject, player_id)
             look_output = await CommandParser(session).cmd_look(fresh, "")
+            room = await session.get(DBObject, fresh.location_id) if fresh.location_id is not None else None
+        play = play_log.start(player_id, player.name, room.name if room else None)
         await websocket.send_json({"type": "output", "message": look_output})
 
         if player.location_id:
@@ -343,6 +347,7 @@ async def handle_websocket(websocket: WebSocket):
                     if current is None:
                         break
                     output = await CommandParser(session).parse(current, command)
+                play_log.command(play)
                 if output:
                     await websocket.send_json({"type": "output",
                                                "message": str(output)[:settings.MAX_OUTPUT_LENGTH]})
@@ -356,6 +361,7 @@ async def handle_websocket(websocket: WebSocket):
     except Exception as e:  # never leak internals to the client
         log.warning("websocket error: %s", type(e).__name__)
     finally:
+        play_log.end(play, "quit")
         manager.release(ip)
         if websocket in manager.session_map:
             disconnected_player_id = manager.disconnect(websocket)

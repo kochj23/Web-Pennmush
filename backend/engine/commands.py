@@ -17,6 +17,7 @@ from backend.engine.quests import QuestManager
 from backend.engine.economy import EconomyManager
 from backend.security import input_validator
 from datetime import datetime
+from backend.play_log import play_log
 import re
 import json
 
@@ -178,7 +179,7 @@ class CommandParser:
 
     async def _try_exit(self, player: DBObject, exit_name: str) -> Optional[str]:
         """Try to use an exit with the given name"""
-        if not player.location_id:
+        if player.location_id is None:
             return None
 
         exits = await self.obj_mgr.get_exits(player.location_id)
@@ -196,7 +197,7 @@ class CommandParser:
 
     async def _use_exit(self, player: DBObject, exit_obj: DBObject) -> str:
         """Move player through an exit"""
-        if not exit_obj.home_id:
+        if exit_obj.home_id is None:
             return "That exit doesn't lead anywhere."
 
         old_room = await self.obj_mgr.get_object(player.location_id)
@@ -321,6 +322,7 @@ class CommandParser:
 
         message = f'{player.name} says, "{args}"'
         await self._announce_to_room(player.location_id, message)
+        play_log.social(player.id, "say")
         return f'You say, "{args}"'
 
     async def cmd_pose(self, player: DBObject, args: str) -> str:
@@ -330,6 +332,7 @@ class CommandParser:
 
         message = f"{player.name} {args}"
         await self._announce_to_room(player.location_id, message)
+        play_log.social(player.id, "pose")
         return message
 
     async def cmd_go(self, player: DBObject, args: str) -> str:
@@ -1145,6 +1148,7 @@ The guide uses local AI (Ollama or MLX) if available.
 
         # Send page
         await self.page_mgr.send_page(player.id, recipient.id, message)
+        play_log.social(player.id, "page")
 
         # TODO: Broadcast page to recipient via WebSocket
         return f"You paged {recipient.name}: {message}"

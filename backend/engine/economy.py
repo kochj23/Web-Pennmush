@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.models import PlayerCurrency, Transaction, DBObject
 from typing import Optional, List
 from datetime import datetime
+from backend.play_log import play_log
 
 
 class EconomyManager:
@@ -60,6 +61,7 @@ class EconomyManager:
         self.session.add(transaction)
 
         await self.session.commit()
+        play_log.credits(player_id, amount, transaction_type)
         return currency.credits
 
     async def remove_credits(
@@ -97,6 +99,7 @@ class EconomyManager:
             self.session.add(transaction)
 
             await self.session.commit()
+            play_log.credits(player_id, -amount, transaction_type)
             return True, currency.credits
 
         return False, 0

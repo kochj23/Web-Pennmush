@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.models import Quest, QuestStep, QuestProgress, DBObject
 from typing import List, Optional, Dict
 from datetime import datetime
+from backend.play_log import play_log
 import json
 
 
@@ -97,6 +98,8 @@ class QuestManager:
         self.session.add(progress)
         await self.session.commit()
         await self.session.refresh(progress)
+        quest = await self.get_quest(quest_id)
+        play_log.quest(player_id, "started", quest.name if quest else f"#{quest_id}")
         return progress
 
     async def advance_quest(self, quest_id: int, player_id: int) -> Optional[QuestProgress]:
@@ -134,6 +137,10 @@ class QuestManager:
             progress.times_completed += 1
 
         await self.session.commit()
+        if progress.is_completed:
+            play_log.quest(player_id, "completed", quest.name)
+        else:
+            play_log.quest(player_id, "advanced", quest.name, progress.current_step)
         return progress
 
     async def get_player_progress(self, player_id: int) -> List[QuestProgress]:

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.models import DBObject, ObjectType, Attribute, Lock
 from typing import Optional, List, Dict
 from datetime import datetime
+from backend.play_log import play_log
 
 
 class ObjectManager:
@@ -133,6 +134,8 @@ class ObjectManager:
         obj.location_id = new_location_id
         obj.modified_at = datetime.utcnow()
         await self.session.commit()
+        if obj.type == ObjectType.PLAYER and destination.type == ObjectType.ROOM:
+            play_log.room(obj.id, destination.name)
         return True
 
     async def get_contents(self, location_id: int) -> List[DBObject]:

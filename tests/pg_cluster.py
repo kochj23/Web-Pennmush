@@ -75,6 +75,20 @@ class PgCluster:
         self.url = f"postgresql://mush:apppw@127.0.0.1:{self.port}/games"
         self.migrate_url = f"postgresql://mush_owner:ownerpw@127.0.0.1:{self.port}/games"
 
+    def apply_play_schema(self, sql_path: str):
+        """Create the platform's `play` schema (writer roles first) in a private cluster, as the superuser."""
+        if not self.dir:
+            raise RuntimeError("play schema needs a private cluster (superuser access)")
+        env = dict(os.environ, PGPASSWORD="superpw")
+        roles = ("gtnw", "cartest", "blompie", "saves", "blompie_mac")
+        pre = " ".join(f"IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='{r}') THEN CREATE ROLE {r} NOLOGIN; END IF;"
+                       for r in roles)
+        subprocess.run(["psql", "-h", "127.0.0.1", "-p", str(self.port), "-U", "postgres", "-d", "games",
+                        "-v", "ON_ERROR_STOP=1", "-c", f"DO $$BEGIN {pre} END$$;", "-f", sql_path],
+                       check=True, capture_output=True, env=env)
+        self.super_url = f"postgresql://postgres:superpw@127.0.0.1:{self.port}/games"
+        return self
+
     def stop(self):
         if self.dir:
             subprocess.run(["pg_ctl", "-D", os.path.join(self.dir, "data"), "-m", "immediate", "stop"],
