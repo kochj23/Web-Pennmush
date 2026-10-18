@@ -58,12 +58,15 @@ class _Pending:
 class RelayJobQueue:
     """Bounded in-memory job queue with per-job futures."""
 
-    def __init__(self, max_pending: int = 20):
+    def __init__(self, max_pending: int = 20, relay_stale_s: float = 45.0, clock=time.monotonic):
         self.max_pending = max_pending
+        self.relay_stale_s = relay_stale_s
+        self.clock = clock
+        self.last_poll: Optional[float] = None
         self._pending: Dict[str, _Pending] = {}
         self._ready: Deque[str] = deque()
         self._cond: Optional[asyncio.Condition] = None
-        self.stats = {"submitted": 0, "completed": 0, "fallback": 0, "timeouts": 0, "rejected_full": 0}
+        self.stats = {"submitted": 0, "completed": 0, "fallback": 0, "timeouts": 0, "rejected_full": 0, "no_relay": 0}
 
     def _condition(self) -> asyncio.Condition:
         if self._cond is None:
@@ -74,9 +77,17 @@ class RelayJobQueue:
     def depth(self) -> int:
         return len(self._pending)
 
+    def relay_alive(self) -> bool:
+        """True if the relay started a poll recently. Stamped at poll start only, so a long-poll
+        orphaned by a relay that died mid-wait doesn't keep it looking alive."""
+        return self.last_poll is not None and self.clock() - self.last_poll < self.relay_stale_s
+
     async def submit(self, template_id: str, vars: Dict[str, Any], player_id: str,
                      max_tokens: int, timeout: float = 60.0) -> Optional[Dict[str, Any]]:
         """Queue a job and wait for its result. None = use the scripted fallback."""
+        if not self.relay_alive():
+            self.stats["no_relay"] += 1
+            return None  # relay down: answer at once instead of making the player wait for the timeout
         if len(self._pending) >= self.max_pending:
             self.stats["rejected_full"] += 1
             return None
@@ -114,6 +125,7 @@ class RelayJobQueue:
 
     async def next_job(self, wait: float) -> Optional[Dict[str, Any]]:
         """Long-poll for the next undelivered job (None after `wait` seconds)."""
+        self.last_poll = self.clock()
         deadline = time.monotonic() + max(0.0, wait)
         cond = self._condition()
         async with cond:

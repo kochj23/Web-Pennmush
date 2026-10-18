@@ -372,7 +372,9 @@ class TestRetry:
         from backend.engine.ai_manager import AIManager
         monkeypatch.setattr(settings, "RELAY_SECRET_MUSH", "s")
         monkeypatch.setattr(settings, "AI_RESULT_TIMEOUT_S", 0.05)
-        mgr = AIManager(RelayJobQueue())
+        q = RelayJobQueue()
+        q.last_poll = q.clock()  # relay alive but never answers
+        mgr = AIManager(q)
         line = await mgr.generate_response("hello?", npc_name="Bob", player_id=1)
         assert line and mgr.queue.stats["timeouts"] == 1
 
@@ -380,17 +382,40 @@ class TestRetry:
     async def test_relay_queue_full_falls_back_immediately(self, monkeypatch):
         from backend.engine.ai_manager import AIManager
         monkeypatch.setattr(settings, "RELAY_SECRET_MUSH", "s")
-        mgr = AIManager(RelayJobQueue(max_pending=0))
+        q = RelayJobQueue(max_pending=0)
+        q.last_poll = q.clock()
+        mgr = AIManager(q)
         start = time.perf_counter()
         assert await mgr.generate_response("hi", npc_name="Bob")
         assert time.perf_counter() - start < 0.2
         assert mgr.queue.stats["rejected_full"] == 1
 
     @pytest.mark.asyncio
+    async def test_relay_down_falls_back_without_waiting(self, monkeypatch):
+        from backend.engine.ai_manager import AIManager
+        monkeypatch.setattr(settings, "RELAY_SECRET_MUSH", "s")
+        monkeypatch.setattr(settings, "AI_RESULT_TIMEOUT_S", 30)
+        mgr = AIManager(RelayJobQueue())  # relay has never polled
+        start = time.perf_counter()
+        assert await mgr.generate_response("hi", npc_name="Bob")
+        assert time.perf_counter() - start < 0.2 and mgr.queue.stats["no_relay"] == 1
+
+    @pytest.mark.asyncio
+    async def test_orphaned_long_poll_does_not_keep_relay_alive(self):
+        now = [100.0]
+        q = RelayJobQueue(relay_stale_s=10, clock=lambda: now[0])
+        poll = asyncio.create_task(q.next_job(0.1))
+        await asyncio.sleep(0)
+        assert q.relay_alive()
+        now[0] += 11
+        assert await poll is None and not q.relay_alive()
+
+    @pytest.mark.asyncio
     async def test_relay_rejected_result_uses_fallback(self, monkeypatch):
         from backend.engine.ai_manager import AIManager
         monkeypatch.setattr(settings, "RELAY_SECRET_MUSH", "s")
         q = RelayJobQueue()
+        q.last_poll = q.clock()
         mgr = AIManager(q)
 
         async def worker():
@@ -646,6 +671,7 @@ class TestFunctional:
             return client.portal.call(go)
 
         import threading
+        assert client.get("/relay/jobs?wait=0", headers=_signed("GET", "/relay/jobs?wait=0")).status_code == 204
         t = threading.Thread(target=lambda: loop_result.setdefault("r", ask()))
         t.start()
         job = None
