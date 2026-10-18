@@ -2,6 +2,59 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.1.0] - 2026-10-17
+
+### Nova Games Deployment
+
+Web-Pennmush now runs as the `mush` service of the Nova Games platform on nova-core3, served at `https://192.168.1.5:8443/mush/` behind Caddy and deployed with `deploy/deploy.sh mush` from the NovaGames repo.
+
+#### Added
+- `Dockerfile` (`novagames/mush`): `python:3.12-slim`, non-root uid 10001, read-only rootfs ready, `/healthz` healthcheck, uvicorn on `0.0.0.0:8000` with `--ws-max-size 16384`, `--limit-concurrency 400`, no `Server` header
+- Postgres via asyncpg on the dedicated Games DB (schema `mush`): `sslmode=verify-full` with a pinned CA, owner role for DDL (`DATABASE_MIGRATE_URL`) and DML-only app role (`DATABASE_URL`), bounded pool, statement timeout, startup retry with backoff, sequence sync after seeding
+- `GET /healthz` liveness endpoint (no DB, no LLM)
+- NPC and guide lines via the Nova Games pull relay (`mush.npc` template, HMAC-signed `GET /relay/jobs` and `POST /relay/jobs/{id}/result`, 404 without `RELAY_SECRET_MUSH`) with a scripted fallback on every failure path
+- Session auth: HMAC-signed tokens in an HttpOnly SameSite=Strict cookie or `Authorization: Bearer`, required on every `/api` route except login, logout and register
+- Admin role (GOD/WIZARD/ROYAL) for `/api/stats`, `/api/admin/*` and the `/admin` page. Admin approve and site-account link endpoints, `GET /api/admin/ai`
+- Registration modes: `approval` (default), `invite`, `closed`, `open` (dev only)
+- `@password <old>=<new>` command
+- `objects.site_account_id` data hook for linking characters to Nova Games site accounts
+- `docs/DEPLOYMENT_AND_SECURITY.md`
+- CI runs the test suite against a private Postgres cluster plus `pip-audit`. Dependabot
+
+#### Security
+- DEBUG off, `/docs`, `/redoc` and OpenAPI disabled, loopback default bind, `SECRET_KEY` from the environment only (secrets generated on core3 into `/srv/games/secrets/mush.env`, never in git)
+- Login rate limits per IP and per account, exact-match usernames, generic errors, timing-equalised unknown users. Registration limited per IP
+- WebSocket: Origin check, per-IP and global socket caps, handshake rate limit, 30 s auth deadline, frame-size and frame-rate caps, one DB session per command, a second login replaces the first, JSON-framed broadcasts
+- Softcode: one global budget per evaluation (calls, time, depth, output), size-argument guard, regex timeouts (ReDoS), `hostname()` no longer leaks the host
+- REST data routes only reveal what the caller could see in game. DARK objects hidden from non-admins
+- Strict CSP from the app as well as Caddy. Frontend has no inline script, style or handlers, uses relative URLs and `textContent` throughout
+- God password never printed: random on first start, written to a 0600 file on the data volume (or taken from `GOD_PASSWORD`)
+- bcrypt used directly (passlib removed), 72-byte password limit enforced
+- 64 KiB request body cap, chunked bodies refused
+- Stored XSS in player names fixed: usernames validated at REST registration, names rendered with `textContent` (#3)
+- Rate limiter is in memory again (the JSON file persistence added in May wrote to disk on every command)
+- Privilege escalation fixed: `@set`, `@describe`, `@destroy`, `@lock` and `@unlock` had no ownership checks, so any player could run `@set me=WIZARD` and become an admin (or edit and destroy other players' objects). They now require PennMUSH-style control of the target; WIZARD/ROYAL need staff, GOD needs God, PENDING is never settable, and comma-joined flag lists are rejected
+
+#### Fixed
+- Relay fallback: when the relay has not polled for 45 s, NPC and guide requests answer at once with the scripted line instead of blocking the command for the 60 s result timeout. `last_poll` is stamped only when a poll starts, so an orphaned long-poll does not keep a dead relay looking alive
+- World seed works on databases that enforce foreign keys
+- WebSocket login broken by a double `websocket.accept()`
+- Missing dependencies and a duplicate keyword in database init
+- CI: two credential-scan tests used an absolute Mac path, so one failed on GitHub Actions and the rest scanned nothing there. They now resolve the repo root from the test file, skip virtualenvs, and assert the scan root exists
+
+#### Changed
+- Dependencies pinned and bumped (FastAPI 0.143, Starlette 1.8, uvicorn 0.54, SQLAlchemy 2.1, websockets 17.2, asyncpg 0.32). python-jose removed and seven dependency CVEs resolved
+- Room-to-player cache for room broadcasts
+- Stale development and audit documents removed
+
+#### Tests
+- pytest suite added and expanded to 457 tests (all passing, 2026-10-17): unit, security, integration, functional, frame, and hardening tests including a real Postgres cluster with the production role layout. `tests/test_permissions.py` covers the object-control rules
+
+#### Documentation
+- README rewritten: features from the code, deployment on core3, Games DB, TLS, full configuration reference, security model, WebSocket protocol, REST API, updated Mermaid diagrams, known limitations
+
+---
+
 ## [3.0.0] - 2026-01-20
 
 ### 🎉 Major Release: Production-Ready MUSH

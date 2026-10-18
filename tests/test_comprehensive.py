@@ -329,7 +329,7 @@ class TestObjectManagerEdgeCases:
 class TestNoHardcodedCredentialsComprehensive:
     """Extended credential and secret scanning across entire codebase."""
 
-    PROJECT_ROOT = Path("/Volumes/Data/xcode/Web-Pennmush")
+    PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
     CREDENTIAL_PATTERNS = [
         (r'sk-[a-zA-Z0-9]{20,}', "OpenAI API key"),
@@ -363,7 +363,8 @@ class TestNoHardcodedCredentialsComprehensive:
         """Scan all Python files for hardcoded API keys and secrets."""
         findings = []
         for py_file in self.PROJECT_ROOT.rglob("*.py"):
-            if "build" in str(py_file) or "__pycache__" in str(py_file):
+            rel = py_file.relative_to(self.PROJECT_ROOT).parts
+            if any(p in {"build", "__pycache__", ".venv", "venv", "site-packages", ".git"} for p in rel):
                 continue
             findings.extend(self._scan_file(py_file))
         assert findings == [], f"Hardcoded credentials found: {findings}"
@@ -610,6 +611,9 @@ class TestCommandParserExtended:
         """@set crystal=HP:100 should set an attribute."""
         parser = CommandParser(seeded_session)
         player = await seeded_session.get(DBObject, 10)
+        crystal = await seeded_session.get(DBObject, 5)
+        crystal.owner_id = player.id  # only the owner (or staff) may @set it
+        await seeded_session.commit()
         result = await parser.cmd_set(player, "crystal=HP:100")
         assert "Attribute" in result or "set" in result.lower()
 
@@ -618,6 +622,9 @@ class TestCommandParserExtended:
         """@set crystal=DARK should set a flag."""
         parser = CommandParser(seeded_session)
         player = await seeded_session.get(DBObject, 10)
+        crystal = await seeded_session.get(DBObject, 5)
+        crystal.owner_id = player.id  # only the owner (or staff) may @set it
+        await seeded_session.commit()
         result = await parser.cmd_set(player, "crystal=DARK")
         assert "Flag" in result or "set" in result.lower()
 

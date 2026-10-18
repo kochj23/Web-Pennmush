@@ -457,6 +457,21 @@ class CommandParser:
         """Link an exit to a destination"""
         return "Not yet implemented."
 
+    # Flags only staff may grant. GOD may only be granted by GOD. PENDING is set by registration only.
+    _STAFF_FLAGS = {"WIZARD", "ROYAL"}
+    _FLAG_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,31}$")
+
+    def _controls(self, player: DBObject, obj: DBObject) -> bool:
+        """PennMUSH-style control: GOD controls everything; nobody else controls a GOD object;
+        wizards control everything else; a player controls itself and what it owns."""
+        if self.obj_mgr.has_flag(player, "GOD"):
+            return True
+        if self.obj_mgr.has_flag(obj, "GOD"):
+            return False
+        if self.obj_mgr.has_flag(player, "WIZARD"):
+            return True
+        return obj.id == player.id or obj.owner_id == player.id
+
     async def cmd_describe(self, player: DBObject, args: str) -> str:
         """Set object description"""
         if "=" not in args:
@@ -481,6 +496,9 @@ class CommandParser:
         if not obj:
             return f"I don't see '{obj_name}' here."
 
+        if not self._controls(player, obj):
+            return "Permission denied."
+
         obj.description = description
         obj.modified_at = datetime.utcnow()
         await self.session.commit()
@@ -495,9 +513,17 @@ class CommandParser:
         obj_name = obj_name.strip()
         setting = setting.strip()
 
-        obj = await self.obj_mgr.get_object_by_name(obj_name, player.location_id)
+        if obj_name.lower() == "me":
+            obj = player
+        elif obj_name.lower() == "here":
+            obj = await self.obj_mgr.get_object(player.location_id)
+        else:
+            obj = await self.obj_mgr.get_object_by_name(obj_name, player.location_id)
         if not obj:
             return f"I don't see '{obj_name}' here."
+
+        if not self._controls(player, obj):
+            return "Permission denied."
 
         # Check if it's an attribute (contains :)
         if ":" in setting:
@@ -505,10 +531,21 @@ class CommandParser:
             await self.obj_mgr.set_attribute(obj.id, attr_name.strip(), attr_value.strip())
             return f"Attribute {attr_name} set on {obj.name}(#{obj.id})"
         else:
-            # It's a flag
-            self.obj_mgr.add_flag(obj, setting)
+            # It's a flag: one bare name (a comma would smuggle extra flags into the list)
+            flag = setting.upper()
+            if not self._FLAG_RE.match(flag):
+                return "Invalid flag name."
+            if flag == "PENDING":
+                return "Permission denied."
+            if flag == "GOD" and not self.obj_mgr.has_flag(player, "GOD"):
+                return "Permission denied."
+            if flag in self._STAFF_FLAGS and not (
+                self.obj_mgr.has_flag(player, "WIZARD") or self.obj_mgr.has_flag(player, "GOD")
+            ):
+                return "Permission denied."
+            self.obj_mgr.add_flag(obj, flag)
             await self.session.commit()
-            return f"Flag {setting} set on {obj.name}(#{obj.id})"
+            return f"Flag {flag} set on {obj.name}(#{obj.id})"
 
     async def cmd_destroy(self, player: DBObject, args: str) -> str:
         """Destroy an object"""
@@ -521,6 +558,9 @@ class CommandParser:
 
         if obj.type == ObjectType.PLAYER:
             return "You can't destroy players."
+
+        if not self._controls(player, obj):
+            return "Permission denied."
 
         await self.obj_mgr.delete_object(obj.id)
         return f"Destroyed: {obj.name}(#{obj.id})"
@@ -951,6 +991,9 @@ The guide uses local AI (Ollama or MLX) if available.
         if not obj:
             return f"I don't see '{obj_name}' here."
 
+        if not self._controls(player, obj):
+            return "Permission denied."
+
         # Set lock
         await self.lock_mgr.set_lock(obj.id, lock_type, lock_key)
         return f"Lock '{lock_type}' set on {obj.name}(#{obj.id}): {lock_key}"
@@ -968,6 +1011,9 @@ The guide uses local AI (Ollama or MLX) if available.
         obj = await self.obj_mgr.get_object_by_name(obj_name, player.location_id)
         if not obj:
             return f"I don't see '{obj_name}' here."
+
+        if not self._controls(player, obj):
+            return "Permission denied."
 
         # Remove lock
         if await self.lock_mgr.remove_lock(obj.id, lock_type):

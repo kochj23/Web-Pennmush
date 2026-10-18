@@ -151,8 +151,10 @@ class TestCommandParser:
     @pytest.mark.asyncio
     async def test_describe_command(self, seeded_session):
         parser = CommandParser(seeded_session)
-        player = await seeded_session.get(DBObject, 10)
-        result = await parser.cmd_describe(player, "here=A beautiful plaza.")
+        god = await seeded_session.get(DBObject, 1)
+        god.location_id = 2  # the plaza is God-owned; only God/wizards may describe it
+        await seeded_session.commit()
+        result = await parser.cmd_describe(god, "here=A beautiful plaza.")
         assert "Description set" in result
 
     @pytest.mark.asyncio

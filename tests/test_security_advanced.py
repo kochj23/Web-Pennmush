@@ -153,7 +153,7 @@ class TestAuthBypass:
 class TestNoHardcodedCredentials:
     """Scan Python source for hardcoded API keys, passwords, and secrets."""
 
-    BACKEND_DIR = Path("/Volumes/Data/xcode/Web-Pennmush/backend")
+    BACKEND_DIR = Path(__file__).resolve().parents[1] / "backend"
 
     # Patterns that indicate hardcoded secrets (ignoring known test defaults)
     SECRET_PATTERNS = [
@@ -162,6 +162,10 @@ class TestNoHardcodedCredentials:
         (r'ghp_[a-zA-Z0-9]{36}', "GitHub PAT"),
         (r'xox[bpoas]-[a-zA-Z0-9\-]+', "Slack token"),
     ]
+
+    def test_scan_root_exists(self):
+        """The scans below must look at real files; a wrong root would make them pass vacuously."""
+        assert (self.BACKEND_DIR / "main.py").is_file()
 
     def _scan_file(self, filepath: Path) -> list:
         """Scan a file for secret patterns."""
