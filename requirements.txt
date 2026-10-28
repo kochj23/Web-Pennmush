@@ -1,6 +1,6 @@
 # Web-Pennmush server dependencies (pinned; audited with pip-audit)
 fastapi==0.143.3
-starlette==1.8.0
+starlette==1.10.0
 uvicorn[standard]==0.54.0
 websockets==17.2
 python-multipart==0.0.32
