@@ -6,7 +6,7 @@ websockets==17.2
 python-multipart==0.0.32
 
 # Database (Postgres in production via asyncpg; aiosqlite for local dev/tests)
-sqlalchemy==2.1.5
+sqlalchemy==2.1.6
 asyncpg==0.32.0
 aiosqlite==0.22.1
 greenlet==3.5.6
