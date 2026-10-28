@@ -2,7 +2,7 @@
 fastapi==0.143.3
 starlette==1.8.0
 uvicorn[standard]==0.54.0
-websockets==17.2
+websockets==17.3
 python-multipart==0.0.32
 
 # Database (Postgres in production via asyncpg; aiosqlite for local dev/tests)
