@@ -117,9 +117,12 @@ The Web-Pennmush server runs as a container named `novagames-mush` behind a Cadd
 - Link character to Nova Games site account:
   - POST `/api/admin/players/{id}/link-account` with `{"site_account_id": "..."}`
   - Stored in `objects.site_account_id`; data hook only, no game logic uses it yet
-- Check AI relay status:
+- Check AI relay health (`state`: healthy / unreachable / disabled / not_configured):
   - GET `/api/admin/ai`
   - Or use `@ai/status` in-game
+- Switch AI replies off or on for everyone (runtime, resets to on at restart):
+  - POST `/api/admin/ai` with `{"enabled": false}`, the admin page button, or `@ai/off` / `@ai/on` in-game
+  - Players can opt out themselves with `@ai/me off`
 
 ## Testing
 

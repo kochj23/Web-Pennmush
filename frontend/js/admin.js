@@ -32,13 +32,38 @@ async function refreshStats() {
     } catch (e) { console.error(e); }
 }
 
+const AI_STATE_TEXT = {
+    healthy: 'Healthy: relay polling',
+    unreachable: 'Unreachable: relay not polling (scripted lines)',
+    disabled: 'Switched off by staff (scripted lines)',
+    not_configured: 'Not configured (scripted lines)',
+};
+
+function renderAI(s) {
+    const el = document.getElementById('ai-status');
+    const age = s.last_poll_age_s === null ? 'never' : `${s.last_poll_age_s}s ago`;
+    el.textContent = `${AI_STATE_TEXT[s.state] || s.state} | last poll ${age}`
+        + ` | queue ${s.queue_depth} | ai ${s.replies.ai} | relay fallback ${s.replies.relay_fallback}`
+        + ` | scripted ${s.replies.scripted} | timeouts ${s.stats.timeouts}`;
+    const btn = document.getElementById('ai-toggle');
+    btn.textContent = s.enabled ? 'Switch AI off' : 'Switch AI on';
+    btn.dataset.enabled = s.enabled ? '1' : '0';
+    btn.disabled = !s.relay_configured;
+}
+
 async function refreshAI() {
+    try { renderAI(await api('api/admin/ai')); } catch (e) { console.error(e); }
+}
+
+async function toggleAI() {
+    const btn = document.getElementById('ai-toggle');
+    const enabled = btn.dataset.enabled !== '1';
     try {
-        const s = await api('api/admin/ai');
-        const el = document.getElementById('ai-status');
-        el.textContent = `${s.is_configured ? 'Relay configured' : 'Not configured (scripted NPC lines)'}`
-            + ` | queue ${s.queue_depth} | ok ${s.stats.completed} | fallback ${s.stats.fallback}`
-            + ` | timeouts ${s.stats.timeouts}`;
+        renderAI(await api('api/admin/ai', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled }),
+        }));
     } catch (e) { console.error(e); }
 }
 
@@ -78,6 +103,7 @@ async function refreshAll() {
 
 document.getElementById('refresh-stats').addEventListener('click', refreshStats);
 document.getElementById('refresh-accounts').addEventListener('click', refreshAccounts);
+document.getElementById('ai-toggle').addEventListener('click', toggleAI);
 api('api/auth/me').then(me => { document.getElementById('admin-name').textContent = me.name; }).catch(() => {});
 refreshAll();
 setInterval(refreshAll, 30000);

@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.2.0] - 2026-11-11
+
+### AI parity (relay only)
+
+Web-Pennmush now has the same game-level AI features as the other Nova games, still through the Nova Games relay only. No direct backends, API keys or network egress were added.
+
+#### Added
+- Real relay health: `state` (`healthy`, `unreachable`, `disabled`, `not_configured`), `relay_alive`, `healthy`, `last_poll_age_s` and `last_ok_age_s` in `@ai/status`, `GET /api/admin/ai` and the admin page (it used to say only "relay configured")
+- Staff AI switch: `@ai/on`, `@ai/off`, `POST /api/admin/ai {enabled}` (admin + same origin, audit-logged) and a button on the admin page. Runtime only; `AI_BACKEND=none` stays the permanent off
+- Per-player opt-out: `@ai/me off|on` (the `NO_AI` flag); NPCs and the guide use scripted lines without contacting the relay
+- Player-visible fallback hint on lines that did not come from the model
+- Output validation (`validate_output`): control/ANSI stripping, single line, AI-disclaimer and template-leak rejection, 600-char word-boundary clip
+- Bounded retries inside the `AI_RESULT_TIMEOUT_S` budget (`AI_RETRIES`, default 1, capped at 3; `AI_RETRY_BACKOFF_S`) for queue-full and invalid output
+- Keyword-matched scripted guide answers when the relay can't answer; `AI_ENABLE_GAME_GUIDE` is now applied
+- `tests/test_ai_parity.py`: 51 tests across Security, Performance, Retry, Unit, Integration, Functional and Frame
+
+#### Fixed
+- `guide` help text claimed it used local Ollama or MLX; it uses the Nova Games narrator relay
+- `talk to <npc>=<message>` returned the usage text when typed in game, and lowercased the message
+
+#### Removed
+- Dead `model`, `temperature` and `max_tokens` arguments of `AIManager.generate_response` and the `list_available_models` stub (the relay picks the model)
+
 ## [3.1.0] - 2026-10-17
 
 ### Nova Games Deployment

@@ -980,11 +980,11 @@ class TestConfigurationIntegrity:
         """Default host is loopback; the container opts in to 0.0.0.0 explicitly."""
         assert Settings.model_fields["HOST"].default == "127.0.0.1"
 
-    def test_ai_backend_default_is_auto(self):
+    def test_ai_backend_default_is_relay(self):
         """AI goes through the Nova Games relay by default."""
         assert Settings.model_fields["AI_BACKEND"].default == "relay"
 
-    def test_ollama_url_is_localhost(self):
+    def test_no_direct_llm_url(self):
         """The server has no direct LLM URL at all (relay pull model)."""
         assert "OLLAMA_BASE_URL" not in Settings.model_fields
 
@@ -1067,7 +1067,7 @@ class TestFastAPIRoutes:
         resp = await app_client.get("/health")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["version"] == "3.1.0"
+        assert data["version"] == "3.2.0"
 
 
 class TestSeededWorldIntegrity:

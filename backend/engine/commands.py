@@ -87,6 +87,9 @@ class CommandParser:
         # AI commands
         self.register_command("guide", self.cmd_guide, ["ai"])
         self.register_command("@ai/status", self.cmd_ai_status)
+        self.register_command("@ai/on", self.cmd_ai_on)
+        self.register_command("@ai/off", self.cmd_ai_off)
+        self.register_command("@ai/me", self.cmd_ai_me)
         self.register_command("@password", self.cmd_password)
 
         # Lock commands
@@ -798,15 +801,11 @@ class CommandParser:
 
     async def cmd_talk(self, player: DBObject, args: str) -> str:
         """Talk to an NPC"""
-        if " to " not in args.lower() or "=" not in args:
-            return "Usage: talk to <npc>=<message>"
-
-        # Parse: talk to <npc>=<message>
-        parts = args.lower().split(" to ", 1)
-        if len(parts) < 2:
-            return "Usage: talk to <npc>=<message>"
-
-        rest = parts[1]
+        # Parse: talk [to] <npc>=<message>. The parser has already removed "talk ", so args
+        # starts with "to "; the message keeps its case.
+        rest = args.strip()
+        if rest.lower().startswith("to "):
+            rest = rest[3:]
         if "=" not in rest:
             return "Usage: talk to <npc>=<message>"
 
@@ -831,7 +830,7 @@ class CommandParser:
             return f"{npc_obj.name} is not an NPC or is not active."
 
         # NPC line via the Nova Games LLM relay (scripted fallback when unavailable)
-        from backend.engine.ai_manager import ai_manager
+        from backend.engine.ai_manager import ai_manager, AIReply, PLAYER_OPT_OUT_FLAG, SOURCE_SCRIPTED
         from backend.security import rate_limiter
 
         message = message[:200]
@@ -844,11 +843,13 @@ class CommandParser:
             except (ValueError, TypeError):
                 conversation_history = []
 
-        if not (rate_limiter.is_allowed(str(player.id), "ai") and rate_limiter.is_allowed(str(player.id), "ai_hour")):
-            ai_response = ai_manager._generate_placeholder(message, npc_obj.name)
+        if self.obj_mgr.has_flag(player, PLAYER_OPT_OUT_FLAG):
+            reply = AIReply(ai_manager._generate_placeholder(message, npc_obj.name), SOURCE_SCRIPTED, "opted_out")
+        elif not (rate_limiter.is_allowed(str(player.id), "ai") and rate_limiter.is_allowed(str(player.id), "ai_hour")):
+            reply = ai_manager.scripted("rate_limited")
         else:
             room = await self.obj_mgr.get_object(player.location_id) if player.location_id is not None else None
-            ai_response = await ai_manager.generate_response(
+            reply = await ai_manager.reply(
                 prompt=message,
                 personality=npc.personality,
                 knowledge_base=npc.knowledge_base or "",
@@ -858,6 +859,7 @@ class CommandParser:
                 player_name=player.name,
                 player_id=player.id,
             )
+        ai_response = reply.text
 
         # Update conversation history (keep last 10 exchanges)
         conversation_history.append({"role": "user", "content": message})
@@ -870,8 +872,8 @@ class CommandParser:
 
         # Format response
         response = f'{npc_obj.name} says, "{ai_response}"'
-
-        return response
+        hint = ai_manager.fallback_hint(reply)
+        return f"{response}\n{hint}" if hint else response
 
     async def cmd_ask(self, player: DBObject, args: str) -> str:
         """Ask an NPC a question (alias for talk)"""
@@ -891,14 +893,11 @@ class CommandParser:
     # ==================== AI GUIDE COMMANDS ====================
 
     async def cmd_guide(self, player: DBObject, args: str) -> str:
-        """
-        AI-powered game guide.
-        Ask questions and get helpful answers from the AI.
-        """
+        """In-game guide: AI answers through the Nova Games relay, scripted answers otherwise."""
         if not args:
-            return """=== AI Game Guide ===
+            return """=== Game Guide ===
 
-The AI guide can help you learn the game and answer questions.
+The guide can help you learn the game and answer questions.
 
 Usage: guide <your question>
 
@@ -910,42 +909,86 @@ Examples:
 
 Aliases: ai
 
-The guide uses local AI (Ollama or MLX) if available.
+The guide uses the Nova Games narrator relay; you get scripted answers when it's away.
+'@ai/status' shows whether AI replies are on; '@ai/me off' turns them off for you.
             """
 
-        from backend.engine.ai_manager import ai_manager
+        from backend.engine.ai_manager import ai_manager, scripted_guide, AIReply, PLAYER_OPT_OUT_FLAG, SOURCE_SCRIPTED
         from backend.security import rate_limiter
 
-        if not ai_manager.is_available():
-            return "The AI guide is resting right now. Try 'help' or 'help <command>' for documentation."
-        if not (rate_limiter.is_allowed(str(player.id), "ai") and rate_limiter.is_allowed(str(player.id), "ai_hour")):
-            return "The guide needs a breather. Try again in a few minutes, or use 'help'."
         args = args[:200]
+        if self.obj_mgr.has_flag(player, PLAYER_OPT_OUT_FLAG):
+            reply = AIReply(scripted_guide(args), SOURCE_SCRIPTED, "opted_out")
+        elif not (rate_limiter.is_allowed(str(player.id), "ai") and rate_limiter.is_allowed(str(player.id), "ai_hour")):
+            reply = AIReply(scripted_guide(args), SOURCE_SCRIPTED, "rate_limited")
+        else:
+            room = await self.obj_mgr.get_object(player.location_id) if player.location_id is not None else None
+            game_context = {"location": room.name if room else "unknown"}
+            reply = await ai_manager.get_game_guidance(args, game_context, player_id=player.id)
 
-        # Build game context
-        room = await self.obj_mgr.get_object(player.location_id)
-        inventory = await self.obj_mgr.get_contents(player.id)
+        hint = ai_manager.fallback_hint(reply)
+        out = f"=== Guide ===\n\n{reply.text}\n\nNeed more help? Try 'help' for command documentation."
+        return f"{out}\n{hint}" if hint else out
 
-        game_context = {
-            "location": room.name if room else "unknown",
-            "inventory": [obj.name for obj in inventory] if inventory else []
-        }
-
-        # Get AI response
-        response = await ai_manager.get_game_guidance(args, game_context, player_id=player.id)
-
-        return f"=== AI Guide ===\n\n{response}\n\nNeed more help? Try 'help' for command documentation."
+    _AI_STATE_TEXT = {
+        "healthy": "On - relay reachable",
+        "unreachable": "On, but the relay is not answering - scripted lines for now",
+        "disabled": "Off (switched off by staff) - scripted lines",
+        "not_configured": "Off (not configured on this server) - scripted lines",
+    }
 
     async def cmd_ai_status(self, player: DBObject, args: str) -> str:
-        """Show AI relay status"""
-        from backend.engine.ai_manager import ai_manager
+        """Show AI relay health and your own AI preference"""
+        from backend.engine.ai_manager import ai_manager, PLAYER_OPT_OUT_FLAG
+        from backend.auth import is_admin
 
         status = ai_manager.get_status()
         output = ["=== AI Status ==="]
-        output.append(f"Backend: {status['backend']} (Nova Games LLM relay)")
-        output.append(f"Configured: {'Yes' if status['is_configured'] else 'No - NPCs use scripted lines'}")
-        output.append(f"Queue depth: {status['queue_depth']}")
+        output.append(f"AI replies: {self._AI_STATE_TEXT.get(status['state'], status['state'])}")
+        output.append("Path: Nova Games narrator relay (fixed templates, no direct model access)")
+        mine = "off (@ai/me on to re-enable)" if self.obj_mgr.has_flag(player, PLAYER_OPT_OUT_FLAG) else "on"
+        output.append(f"Your AI replies: {mine}")
+        if is_admin(player):
+            age = status["last_poll_age_s"]
+            output.append(f"Relay last polled: {'never' if age is None else f'{age}s ago'}")
+            output.append(f"Queue depth: {status['queue_depth']}  Retries: {status['retries']}  "
+                          f"Timeout: {status['timeout_s']}s")
+            output.append("Replies: " + ", ".join(f"{k} {v}" for k, v in status["replies"].items()))
         return "\n".join(output)
+
+    async def _set_ai_enabled(self, player: DBObject, enabled: bool) -> str:
+        from backend.engine.ai_manager import ai_manager
+        from backend.auth import is_admin
+        from backend.security import security_logger
+        if not is_admin(player):
+            return "Permission denied."
+        ai_manager.set_enabled(enabled)
+        security_logger.log_admin_action(player.id, f"ai {'on' if enabled else 'off'}")
+        state = ai_manager.state()
+        return f"AI replies switched {'on' if enabled else 'off'} for everyone (state: {state})."
+
+    async def cmd_ai_on(self, player: DBObject, args: str) -> str:
+        """@ai/on - staff: let NPCs and the guide use the relay again"""
+        return await self._set_ai_enabled(player, True)
+
+    async def cmd_ai_off(self, player: DBObject, args: str) -> str:
+        """@ai/off - staff: scripted NPC and guide lines for everyone"""
+        return await self._set_ai_enabled(player, False)
+
+    async def cmd_ai_me(self, player: DBObject, args: str) -> str:
+        """@ai/me on|off - your own AI preference (sets or clears the NO_AI flag)"""
+        from backend.engine.ai_manager import PLAYER_OPT_OUT_FLAG
+        choice = args.strip().lower()
+        if choice not in ("on", "off"):
+            mine = "off" if self.obj_mgr.has_flag(player, PLAYER_OPT_OUT_FLAG) else "on"
+            return f"Your AI replies are {mine}. Usage: @ai/me on|off"
+        if choice == "off":
+            self.obj_mgr.add_flag(player, PLAYER_OPT_OUT_FLAG)
+        else:
+            self.obj_mgr.remove_flag(player, PLAYER_OPT_OUT_FLAG)
+        await self.session.commit()
+        return ("AI replies off for you: NPCs and the guide will use scripted lines." if choice == "off"
+                else "AI replies on for you.")
 
     async def cmd_password(self, player: DBObject, args: str) -> str:
         """@password <old>=<new> - change your own password"""

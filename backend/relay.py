@@ -17,7 +17,7 @@ import secrets
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Deque, Dict, Optional
+from typing import Any, Deque, Dict, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Request, Response
 
@@ -85,12 +85,18 @@ class RelayJobQueue:
     async def submit(self, template_id: str, vars: Dict[str, Any], player_id: str,
                      max_tokens: int, timeout: float = 60.0) -> Optional[Dict[str, Any]]:
         """Queue a job and wait for its result. None = use the scripted fallback."""
+        result, _ = await self.submit_detailed(template_id, vars, player_id, max_tokens, timeout)
+        return result
+
+    async def submit_detailed(self, template_id: str, vars: Dict[str, Any], player_id: str,
+                              max_tokens: int, timeout: float = 60.0) -> Tuple[Optional[Dict[str, Any]], str]:
+        """Like submit(), plus why there is no result: 'no_relay', 'queue_full', 'timeout' or '' (got one)."""
         if not self.relay_alive():
             self.stats["no_relay"] += 1
-            return None  # relay down: answer at once instead of making the player wait for the timeout
+            return None, "no_relay"  # relay down: answer at once instead of making the player wait for the timeout
         if len(self._pending) >= self.max_pending:
             self.stats["rejected_full"] += 1
-            return None
+            return None, "queue_full"
         job_id = secrets.token_hex(12)
         job = {"job_id": job_id, "template_id": template_id, "player_id": str(player_id)[:64],
                "vars": vars, "max_tokens": int(max_tokens)}
@@ -102,17 +108,17 @@ class RelayJobQueue:
             self._ready.append(job_id)
             cond.notify(1)
         try:
-            result = await asyncio.wait_for(fut, timeout)
+            result = await asyncio.wait_for(fut, max(0.0, timeout))
         except asyncio.TimeoutError:
             self.stats["timeouts"] += 1
-            return None
+            return None, "timeout"
         finally:
             self._pending.pop(job_id, None)
         if result.get("status") == "ok":
             self.stats["completed"] += 1
         else:
             self.stats["fallback"] += 1
-        return result
+        return result, ""
 
     def _pop_ready(self) -> Optional[Dict[str, Any]]:
         while self._ready:

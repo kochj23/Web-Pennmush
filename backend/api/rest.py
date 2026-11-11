@@ -313,7 +313,21 @@ async def admin_link_account(player_id: int, body: LinkAccountRequest, admin: DB
     return {"id": target.id, "site_account_id": target.site_account_id}
 
 
+class AIToggleRequest(BaseModel):
+    enabled: bool
+
+
 @router.get("/admin/ai")
 async def admin_ai_status(admin: DBObject = Depends(require_admin)):
     from backend.engine.ai_manager import ai_manager
+    return ai_manager.get_status()
+
+
+@router.post("/admin/ai", dependencies=[Depends(same_origin)])
+async def admin_ai_toggle(body: AIToggleRequest, admin: DBObject = Depends(require_admin)):
+    """Staff AI on/off switch (runtime; AI_BACKEND sets the value at start-up)."""
+    from backend.engine.ai_manager import ai_manager
+    from backend.security import security_logger
+    ai_manager.set_enabled(body.enabled)
+    security_logger.log_admin_action(admin.id, f"ai {'on' if body.enabled else 'off'}")
     return ai_manager.get_status()

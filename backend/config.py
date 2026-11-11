@@ -21,7 +21,7 @@ class Settings(BaseSettings):
 
     # Application
     APP_NAME: str = "Web-Pennmush"
-    APP_VERSION: str = "3.1.0"
+    APP_VERSION: str = "3.2.0"
     DEBUG: bool = False
 
     # Server (container overrides HOST to 0.0.0.0; local default stays on loopback)
@@ -89,7 +89,9 @@ class Settings(BaseSettings):
     # authenticates with RELAY_SECRET_MUSH. Without it, NPCs use scripted lines.
     AI_BACKEND: str = "relay"  # relay | none
     RELAY_SECRET_MUSH: str = ""
-    AI_RESULT_TIMEOUT_S: float = 60.0
+    AI_RESULT_TIMEOUT_S: float = 60.0  # total budget per reply, retries included
+    AI_RETRIES: int = 1  # extra attempts for fast transient failures (queue full, invalid output)
+    AI_RETRY_BACKOFF_S: float = 0.05  # doubled per retry; queue-full fallback stays well under 200 ms
     AI_MAX_PENDING: int = 20
     AI_ENABLE_GAME_GUIDE: bool = True
 

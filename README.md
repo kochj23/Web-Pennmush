@@ -5,7 +5,7 @@ A web-based MUSH server inspired by [PennMUSH](https://github.com/pennmush/pennm
 ![Build](https://github.com/kochj23/Web-Pennmush/actions/workflows/build.yml/badge.svg)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.12-blue)
-![Version](https://img.shields.io/badge/version-3.1.0-brightgreen)
+![Version](https://img.shields.io/badge/version-3.2.0-brightgreen)
 ![Tests](https://img.shields.io/badge/tests-484%20passed-brightgreen)
 
 It runs as the `mush` service of the Nova Games platform on nova-core3 and is served at **https://192.168.1.5:8443/mush/** (LAN only). NPC dialogue comes from a local LLM, but the server never calls a model itself. It queues fixed-template jobs that the Nova Games relay pulls, and when the relay is down it answers at once with a scripted line.
@@ -20,7 +20,7 @@ Author: Jordan Koch ([kochj23](https://github.com/kochj23)). Personal project, M
 - [Features](#features)
 - [Commands](#commands)
 - [Softcode](#softcode)
-- [AI NPCs and the relay](#ai-npcs-and-the-relay)
+- [AI options](#ai-options)
 - [Authentication and sessions](#authentication-and-sessions)
 - [Rate limits and connection caps](#rate-limits-and-connection-caps)
 - [REST API](#rest-api)
@@ -115,13 +115,13 @@ sequenceDiagram
     R->>Q: GET /relay/jobs?wait=20 (signed, stamps last_poll)
     B->>M: talk to Guard=hello
     M->>M: per-player limits ai (5 per min) and ai_hour (20 per hour)
-    alt RELAY_SECRET_MUSH unset, AI_BACKEND=none, or player over quota
-        M-->>B: Guard says, "<scripted line>"
-    else relay configured
+    alt not configured, staff switched AI off, player set NO_AI, or player over quota
+        M-->>B: Guard says, "<scripted line>" (+ fallback hint unless NO_AI)
+    else relay configured and switched on
         M->>Q: submit mush.npc with vars clipped to contract caps
-        alt relay has not polled for 45 s, or 20 jobs already pending
+        alt relay has not polled for 45 s, or 20 jobs already pending (one short retry)
             Q-->>M: None, immediately
-            M-->>B: Guard says, "<scripted line>"
+            M-->>B: Guard says, "<scripted line>" + "(scripted reply - the narrator is away)"
         else relay alive
             Q-->>R: 200 job {job_id, template_id, player_id, vars, max_tokens 150}
             R->>O: fixed system prompt, vars fenced as untrusted
@@ -131,10 +131,11 @@ sequenceDiagram
             else relay busy, over quota, host under load, or output filtered
                 R->>M: POST /relay/jobs/job_id/result {status fallback, relay scripted text}
             end
-            M-->>B: Guard says, "<text>"
+            M->>M: validate_output (one retry on nonsense, then scripted)
+            M-->>B: Guard says, "<text>" (+ hint when it was a fallback)
         end
     end
-    Note over M,Q: No result within AI_RESULT_TIMEOUT_S (60 s) or status rejected gives a scripted line
+    Note over M,Q: AI_RESULT_TIMEOUT_S (60 s) is the total budget, retries included. Timeout or status rejected gives a scripted line
 ```
 
 ---
@@ -149,7 +150,7 @@ Everything below is taken from the current code in `backend/` and `frontend/`. G
 
 **Room map** (`frontend/js/roommap.js`, `GET /api/rooms/map`). An SVG graph of rooms and exits drawn with a small built-in force layout (no D3 or other library). The current room is highlighted. Players get a radius of up to 3 around their own location. Admins can choose any centre and a radius up to 10. The breadth-first search stops at 200 nodes, and DARK rooms are hidden from non-admins.
 
-**Admin panel** (`/admin`, `frontend/admin.html`, `js/admin.js`). Served only to a logged-in, non-pending GOD, WIZARD or ROYAL session. Anyone else is redirected to `./`. It shows server stats (players, connected, rooms, objects), the AI relay status, and the player list with pending accounts and an Approve button. It refreshes every 30 s and uses the HttpOnly session cookie.
+**Admin panel** (`/admin`, `frontend/admin.html`, `js/admin.js`). Served only to a logged-in, non-pending GOD, WIZARD or ROYAL session. Anyone else is redirected to `./`. It shows server stats (players, connected, rooms, objects), the AI state and relay health with a button to switch AI replies off or on, and the player list with pending accounts and an Approve button. It refreshes every 30 s and uses the HttpOnly session cookie.
 
 **Channels** (`backend/engine/channels.py`). List, join, leave, who, create (with optional alias), and speaking by alias (`pub Hello`) for channel members.
 
@@ -167,7 +168,7 @@ Everything below is taken from the current code in `backend/` and `frontend/`. G
 
 **Help.** In-game help topics stored in the database: `help`, `commands`, `channels`, `look`, `building`, `softcode`, `@npc/create`.
 
-**NPCs and the guide.** NPC objects with a personality, a knowledge base and a stored conversation history (last 10 exchanges). Lines come from the `mush.npc` relay template or a scripted fallback. See [AI NPCs and the relay](#ai-npcs-and-the-relay).
+**NPCs and the guide.** NPC objects with a personality, a knowledge base and a stored conversation history (last 10 exchanges). Lines come from the `mush.npc` relay template or a scripted fallback. See [AI options](#ai-options).
 
 **Site account link hook.** `objects.site_account_id` (nullable, indexed) links a character to a Nova Games site account. Admins set it through the REST API. Nothing reads it yet.
 
@@ -210,8 +211,10 @@ Commands are case-insensitive. `<...>` marks an argument. Admin means the GOD or
 | | `@npc/personality <npc>=<text>`, `@npc/knowledge <npc>=<text>` | |
 | | `talk to <npc>=<message>` | Message clipped to 200 chars |
 | | `ask <npc>=<question>`, `ask <npc> <question>` | Same as `talk` |
-| AI | `guide` / `ai <question>` | In-game guide via the same template |
-| | `@ai/status` | Relay configuration and queue depth |
+| AI | `guide` / `ai <question>` | In-game guide via the same template; keyword answers when the relay can't answer |
+| | `@ai/status` | AI state (healthy, unreachable, switched off, not configured) and your own setting. Admins also see last poll, queue and counters |
+| | `@ai/me on\|off` | Your own AI preference (clears or sets the `NO_AI` flag; `@set me=NO_AI` also works) |
+| | `@ai/on`, `@ai/off` | Admin. Switch AI replies on or off for everyone at runtime |
 | Account | `@password <old>=<new>` | 8 to 72 bytes. Shares the per-account login limit |
 | Quests | `quest/list` / `quests`, `quest/start <name or id>` | |
 | | `quest/progress` / `quest/status`, `quest/log` | |
@@ -251,23 +254,62 @@ See [SOFTCODE_REFERENCE.md](SOFTCODE_REFERENCE.md) for syntax and the core funct
 
 ---
 
-## AI NPCs and the relay
+## AI options
 
 `backend/engine/ai_manager.py` and `backend/relay.py`, implementing CONTRACT.md section 9 of the Nova Games platform.
 
+Web-Pennmush has exactly one LLM path: the Nova Games relay. There is no backend or model picker, no endpoint URL, no API key and no outbound connection from the game. The relay chooses the model (core3 Ollama) and runs fixed templates. So "AI options" here are the game-level switches every Nova game shares:
+
+| Feature | How it works here |
+|---|---|
+| Backend | Relay only (`AI_BACKEND=relay`, or `none` for no AI). Model choice belongs to the relay |
+| Keys | None. The only secret is the relay HMAC secret `RELAY_SECRET_MUSH`, injected from `mush.env` on core3 (no Keychain in a container) |
+| AI on/off | Server: `AI_BACKEND=none` or no `RELAY_SECRET_MUSH`. Staff at runtime: `@ai/off` / `@ai/on` or the admin page button (`POST /api/admin/ai`). Per player: `@ai/me off` (the `NO_AI` flag). Guide only: `AI_ENABLE_GAME_GUIDE=false` |
+| Scripted fallback | Every failure path gives a scripted NPC line or a keyword-matched guide answer at once. Play never waits on or loses a turn to the relay |
+| Fallback hint | A line that did not come from the model ends with `(scripted reply - the narrator is away)` or `(scripted reply - AI narration is switched off)`. No hint for players who chose `NO_AI` |
+| Status | `@ai/status`, `GET /api/admin/ai` and the admin page report `state`: `healthy` (relay polled in the last 45 s), `unreachable` (configured but not polling), `disabled` (staff switch) or `not_configured`, plus `relay_alive`, `last_poll_age_s` and `last_ok_age_s` |
+| Timeouts and retries | `AI_RESULT_TIMEOUT_S` (60 s) is the total budget per reply. Up to `AI_RETRIES` (1, capped at 3) extra attempts for fast transient failures: queue full (short backoff) and output that fails validation. Timeouts, a dead relay and `rejected` results are not retried |
+| Output validation | `validate_output` strips control characters and ANSI escapes, flattens to one line, removes wrapping quotes and `assistant:`-style prefixes, rejects AI disclaimers, template or fence leakage and text with no letters, and clips to 600 chars at a word boundary. Rejected text is never shown or stored in NPC history |
+
+Removed in 3.2.0: the unused `model`, `temperature` and `max_tokens` arguments of `generate_response` and the `list_available_models` stub. The game never chose a model.
+
+```mermaid
+flowchart TD
+    P["talk / ask / guide"] --> O{"player has NO_AI?"}
+    O -- yes --> S["scripted line<br/>(no hint)"]
+    O -- no --> RL{"over ai / ai_hour limit?"}
+    RL -- yes --> SH["scripted line + hint"]
+    RL -- no --> C{"AI_BACKEND=relay and<br/>RELAY_SECRET_MUSH set?"}
+    C -- no --> SH
+    C -- yes --> T{"staff switch on?<br/>(@ai/on, admin page)"}
+    T -- no --> SH
+    T -- yes --> A{"relay polled in last 45 s?"}
+    A -- no --> SH
+    A -- yes --> Q["queue mush.npc job<br/>(RelayJobQueue)"]
+    Q --> R["novagames-relay pulls job<br/>core3 Ollama, fixed template"]
+    R --> V{"status ok and<br/>validate_output passes?"}
+    V -- yes --> AI["model line shown<br/>(stored in NPC history)"]
+    V -- "invalid output or queue full" --> RT{"retry left within<br/>AI_RESULT_TIMEOUT_S?"}
+    RT -- yes --> Q
+    RT -- no --> SH
+    V -- "relay fallback text" --> RF["relay scripted text + hint<br/>(guide uses keyword answer)"]
+    V -- "timeout / rejected" --> SH
+```
+
 - **No model client in the game.** The image contains no Ollama, MLX or Nova libraries. `talk`, `ask` and `guide` build a `mush.npc` job. Its vars are `npc_name` (40), `npc_description` (400, personality plus knowledge), `room_name` (80), `player_name` (40), `player_says` (200), and `history` (last 5 turns, 40/200 chars). Control characters are stripped and every value is clipped to the contract caps. `max_tokens` is 150.
 - **Pull model.** `RelayJobQueue` is a bounded in-memory queue (`AI_MAX_PENDING`, default 20) with one future per job. The relay long-polls `GET /relay/jobs?wait=N` (N clamped to 0-30 s, the relay uses 20), receives `200 {job}` or `204`, and posts `POST /relay/jobs/{job_id}/result`. Results are capped at 16 KiB and job ids must match `[A-Za-z0-9_-]{1,64}`.
-- **HMAC signing.** Both endpoints require `X-Relay-Ts` (unix seconds) and `X-Relay-Sig = hex(HMAC_SHA256(RELAY_SECRET_MUSH, ts + "\n" + METHOD + "\n" + path_with_query + "\n" + hex(sha256(body))))`. Comparison is constant-time and the allowed clock skew is 60 s. Without `RELAY_SECRET_MUSH` (or with `AI_BACKEND=none`) both endpoints return 404. Caddy also returns 404 for `/mush/relay/*`, so only containers on `games_internal` can reach them.
+- **HMAC signing.** Both endpoints require `X-Relay-Ts` (unix seconds) and `X-Relay-Sig = hex(HMAC_SHA256(RELAY_SECRET_MUSH, ts + "\n" + METHOD + "\n" + path_with_query + "\n" + hex(sha256(body))))`. Comparison is constant-time and the allowed clock skew is 60 s. Without `RELAY_SECRET_MUSH` (or with `AI_BACKEND=none`) both endpoints return 404. The staff runtime switch does not close them, so relay health stays visible while AI replies are off. Caddy also returns 404 for `/mush/relay/*`, so only containers on `games_internal` can reach them.
 - **Fallback.** Every failure path gives a scripted line:
   - relay not configured
   - player over the `ai` or `ai_hour` limit
   - relay has not started a poll in 45 s. This is the fix in 68db6d9: the player gets an immediate answer instead of waiting for the 60 s timeout. `last_poll` is stamped only when a poll starts, so a poll orphaned by a dead relay does not keep it looking alive.
   - queue full
   - no result within `AI_RESULT_TIMEOUT_S` (60 s)
-  - `rejected` or empty result
+  - `rejected` result, or output that fails validation after the retry
+  - AI switched off by staff, or the player set `NO_AI`
 
-  A relay `fallback` result carries the relay's own scripted text, which is used as-is.
-- **Status.** `@ai/status` in game and `GET /api/admin/ai` report the backend, whether the relay is configured, the queue depth, and the counters `submitted`, `completed`, `fallback`, `timeouts`, `rejected_full` and `no_relay`.
+  A relay `fallback` result carries the relay's own scripted text, which is used for NPCs (with the hint). The guide answers from its keyword table instead.
+- **Status.** `@ai/status` in game and `GET /api/admin/ai` report the state (see the table above), whether the relay is configured and actually polling, the queue depth, the queue counters `submitted`, `completed`, `fallback`, `timeouts`, `rejected_full` and `no_relay`, and the reply counters `ai`, `relay_fallback`, `scripted`, `invalid_output` and `retries`.
 - **Relay side** (NovaGames repo, `relay/nova_games_relay`). The relay has a fixed `mush.npc` system prompt (in character, one to three sentences, under 60 words, never claims to be an AI). It fences vars as untrusted and enforces its own limits: concurrency 4, 30 jobs per player per 10 minutes, a 45 s model timeout, retries, and yielding under host load. The default model is `llama3.2:3b`.
 
 ---
@@ -348,7 +390,8 @@ All paths are as the app sees them. Through Caddy, prefix them with `/mush`. Eve
 | `GET /api/admin/players` | Admin | All players with pending, admin and `site_account_id` |
 | `POST /api/admin/players/{id}/approve` | Admin + Origin | Clears PENDING |
 | `POST /api/admin/players/{id}/link-account` | Admin + Origin | `{site_account_id}` (or null to unlink) |
-| `GET /api/admin/ai` | Admin | AI relay status and counters |
+| `GET /api/admin/ai` | Admin | AI state, relay health (`relay_alive`, `last_poll_age_s`, `last_ok_age_s`) and counters |
+| `POST /api/admin/ai` | Admin + Origin | `{enabled: bool}` runtime AI switch. Returns the new status |
 
 Other routes:
 
@@ -541,7 +584,7 @@ All settings come from environment variables (`backend/config.py`, pydantic-sett
 | Variable | Default | Secret | Purpose |
 |---|---|---|---|
 | `APP_NAME` | `Web-Pennmush` | | Display name |
-| `APP_VERSION` | `3.1.0` | | Reported by `/health` and `/api/` |
+| `APP_VERSION` | `3.2.0` | | Reported by `/health` and `/api/` |
 | `DEBUG` | `false` | | Kept off. Deploy writes `DEBUG=false` |
 | `HOST` | `127.0.0.1` (image `0.0.0.0`) | | Bind address for `python -m backend.main` |
 | `PORT` | `8000` | | Port |
@@ -584,9 +627,11 @@ All settings come from environment variables (`backend/config.py`, pydantic-sett
 | `IDLE_TIMEOUT_MINUTES` | `30` | | Defined, not enforced yet |
 | `AI_BACKEND` | `relay` | | `relay` or `none` |
 | `RELAY_SECRET_MUSH` | empty (scripted NPCs) | **yes** | Relay HMAC secret. Must equal the value in `relay.env` |
-| `AI_RESULT_TIMEOUT_S` | `60.0` | | Wait for a relay result |
+| `AI_RESULT_TIMEOUT_S` | `60.0` | | Total wait for a relay result, retries included |
+| `AI_RETRIES` | `1` | | Extra attempts for fast transient failures (queue full, invalid output). Capped at 3 |
+| `AI_RETRY_BACKOFF_S` | `0.05` | | Backoff before a queue-full retry, doubled per attempt |
 | `AI_MAX_PENDING` | `20` | | Queue bound |
-| `AI_ENABLE_GAME_GUIDE` | `true` | | Defined |
+| `AI_ENABLE_GAME_GUIDE` | `true` | | `false` gives scripted guide answers without asking the relay |
 
 Read directly from the process environment, outside `Settings`:
 
@@ -635,12 +680,12 @@ pip install -r requirements-dev.txt
 python -m pytest              # or: python -m pytest -q
 ```
 
-Current result: **484 passed** (verified 2026-10-18).
+Current result: **534 passed, 1 skipped** (verified 2026-11-11; the skip needs a NovaGames checkout next to this repo).
 
 - Configuration: `pytest.ini` sets `asyncio_mode = auto`, `testpaths = tests`, and a 60 s per-test timeout (thread method).
 - `tests/conftest.py` sets `BCRYPT_ROUNDS=4`, `REGISTRATION_MODE=open`, a throwaway SQLite file DB under `tests/.data`, and test-only `SECRET_KEY` and `GOD_PASSWORD` values. Most tests use an in-memory SQLite engine. The process-wide rate limiter is cleared around every test.
 - Postgres integration tests (`tests/test_hardening.py`, via `tests/pg_cluster.py`) use `PG_TEST_URL` / `PG_TEST_MIGRATE_URL` if set. Otherwise they `initdb` a private cluster in a temp directory on a free loopback port, with SCRAM auth and the production role layout (`mush_owner` owns schema `mush`, `mush` gets DML only), and tear it down afterwards. `tests/test_play_log.py` also creates the platform `play` schema in that private cluster (from `../NovaGames/deploy/db/play.sql` when that checkout exists, else the vendored copy `tests/play_schema.sql`, which a test keeps in sync), so its Postgres tests need the private cluster rather than `PG_TEST_URL`. That needs `initdb`, `pg_ctl` and `psql` on `PATH` (Homebrew `postgresql@17` on the Mac; CI installs Ubuntu's `postgresql` and adds its `bin` directory to `PATH`). Without them those tests are skipped. They never touch any other Postgres.
-- Coverage areas: models, objects, commands, locks, channels, mail and pages, quests and economy, moderation, REST API, security (validation, rate limits, credential scanning), auth bypass, hardening (Origin, caps, frame limits, relay signing and fallback, softcode budget, Postgres TLS URL handling, real-Postgres seed and roles), play history (`tests/test_play_log.py`: Security, Performance, Retry, Unit, Integration on real Postgres with row-level security, Functional over the WebSocket, Frame), and integration.
+- Coverage areas: models, objects, commands, locks, channels, mail and pages, quests and economy, moderation, REST API, security (validation, rate limits, credential scanning), auth bypass, hardening (Origin, caps, frame limits, relay signing and fallback, softcode budget, Postgres TLS URL handling, real-Postgres seed and roles), the AI layer (`tests/test_ai_parity.py`: Security, Performance, Retry, Unit, Integration, Functional, Frame for the toggles, relay health, retries, output validation and scripted fallback), play history (`tests/test_play_log.py`: Security, Performance, Retry, Unit, Integration on real Postgres with row-level security, Functional over the WebSocket, Frame), and integration.
 - CI (`.github/workflows/build.yml`) runs on pushes and PRs to main: Python 3.12, Postgres binaries, `python -m pytest -q`, then `pip-audit -r requirements.txt`.
 
 ---
@@ -653,7 +698,8 @@ These come from the current code and are tracked for follow-up:
 - Room-wide messages from `say`, `pose` and movement are not yet delivered to other players. `_announce_to_room` is a stub, and only connect/disconnect notices are broadcast. `page` stores the page but does not push it to the recipient. Channel messages are returned only to the sender.
 - `@kick` does not close the target's socket. The MUZZLED flag is not checked by communication commands. Locks are stored and evaluated but not enforced by `get`, `go` and similar commands. `@link` is not implemented.
 - The softcode interpreter has no in-game entry point yet (there is no `think` or attribute trigger).
-- `IDLE_TIMEOUT_MINUTES`, `STARTING_ROOM`, `AI_ENABLE_GAME_GUIDE` and the `channel` rate limit are defined but not applied.
+- `IDLE_TIMEOUT_MINUTES`, `STARTING_ROOM` and the `channel` rate limit are defined but not applied.
+- The staff AI switch (`@ai/off`, `POST /api/admin/ai`) is held in memory and resets to on at restart. Use `AI_BACKEND=none` for a permanent off.
 - Rate limiter, socket caps, room cache and relay queue are in process memory. Run a single uvicorn worker (as the image does).
 
 ---

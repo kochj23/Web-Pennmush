@@ -388,7 +388,8 @@ class TestRetry:
         start = time.perf_counter()
         assert await mgr.generate_response("hi", npc_name="Bob")
         assert time.perf_counter() - start < 0.2
-        assert mgr.queue.stats["rejected_full"] == 1
+        # one bounded retry (AI_RETRIES) after a short backoff, then the scripted line
+        assert mgr.queue.stats["rejected_full"] == 1 + settings.AI_RETRIES
 
     @pytest.mark.asyncio
     async def test_relay_down_falls_back_without_waiting(self, monkeypatch):
