@@ -6,9 +6,30 @@ A web-based MUSH server inspired by [PennMUSH](https://github.com/pennmush/pennm
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.12-blue)
 ![Version](https://img.shields.io/badge/version-3.2.0-brightgreen)
-![Tests](https://img.shields.io/badge/tests-484%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-534%20passed-brightgreen)
 
-It runs as the `mush` service of the Nova Games platform on nova-core3 and is served at **https://192.168.1.5:8443/mush/** (LAN only). NPC dialogue comes from a local LLM, but the server never calls a model itself. It queues fixed-template jobs that the Nova Games relay pulls, and when the relay is down it answers at once with a scripted line.
+It runs as the `mush` service of the Nova Games platform on nova-core3 and is served at **https://192.168.1.5:8443/mush/** (LAN only).
+
+NPCs and the in-game guide are voiced by an AI narrator through the Nova Games relay. The server never calls a model and holds no API keys: it queues fixed-template jobs that the relay pulls and runs on core3's Ollama. Every reply is validated before a player sees it. When the relay is down, slow, switched off by staff or turned off by the player, the game answers at once with a scripted line, so it is fully playable without AI.
+
+## At a glance
+
+| | |
+|---|---|
+| Version | 3.2.0 (2026-11-11). See [CHANGELOG.md](CHANGELOG.md) |
+| Stack | Python 3.12, FastAPI, SQLAlchemy async (asyncpg / aiosqlite), uvicorn, plain JavaScript |
+| Where | nova-core3 container `novagames-mush`, behind Caddy at `/mush/`, deployed with `deploy/deploy.sh mush` from the NovaGames repo |
+| Data | Postgres 17 Games DB, schema `mush` (TLS verify-full, DML-only runtime role). Play history in the platform `play` schema |
+| AI | Relay only (`mush.npc` template). Staff and per-player on/off, real relay health, bounded retries, output validation, scripted fallback. See [AI options](#ai-options) |
+| Tests | 534 passed, 1 skipped (`python -m pytest -q`). CI on every push |
+
+### New in 3.2.0
+
+- AI status shows real relay health (`healthy`, `unreachable`, `disabled`, `not_configured`) in game, over REST and on the admin page.
+- AI on/off: staff `@ai/on` / `@ai/off` or the admin page button, players `@ai/me on|off`, `AI_ENABLE_GAME_GUIDE` for the guide.
+- Fallback lines carry a short hint; the guide answers from a keyword table when the relay can't.
+- Model output is validated; queue-full and invalid output get one bounded retry within the reply budget.
+- `talk to <npc>=<message>` works in game again, and the guide help no longer claims to use Ollama or MLX.
 
 Author: Jordan Koch ([kochj23](https://github.com/kochj23)). Personal project, MIT licensed.
 
@@ -16,6 +37,7 @@ Author: Jordan Koch ([kochj23](https://github.com/kochj23)). Personal project, M
 
 ## Contents
 
+- [At a glance](#at-a-glance)
 - [Architecture](#architecture)
 - [Features](#features)
 - [Commands](#commands)
@@ -70,6 +92,57 @@ flowchart LR
 - Caddy terminates TLS with its internal CA and strips the `/mush` prefix, so the app sees `/`, `/ws`, `/api/...`, `/healthz`. Every client URL in the frontend is relative for that reason.
 - The mush container is attached only to `games_internal`. It has no host ports, no internet, no LAN access. Its only peers are Caddy, games-pg and the relay.
 - The relay is the only component that can reach Ollama (via `games_relay`). Traffic is outbound from the relay to the game: the game never connects to the relay.
+
+### Data flow and state
+
+Where each kind of state lives, and which component reads or writes it.
+
+```mermaid
+flowchart TB
+    subgraph browser["Browser"]
+        UI["index.html: app.js, websocket.js, ui.js, roommap.js"]
+        AD["admin.html: admin.js"]
+    end
+
+    subgraph app["novagames-mush (one uvicorn worker)"]
+        REST["REST /api (rest.py)<br/>auth, players, objects, map, admin"]
+        WS["WebSocket /ws (websocket.py)<br/>Origin, caps, FrameLimiter"]
+        CP["CommandParser (commands.py)<br/>ObjectManager, channels, mail, pages,<br/>quests, economy, moderation, locks"]
+        AI["AIManager (ai_manager.py)<br/>toggles, validation, retries, fallback"]
+        Q["RelayJobQueue (relay.py)<br/>in memory, bounded, last_poll"]
+        RLM["RateLimiter, socket caps<br/>(in memory)"]
+        PL["PlayLog (play_log.py)<br/>background writer"]
+    end
+
+    subgraph pg["games-pg (Postgres 17, db games)"]
+        MUSH[("schema mush<br/>objects, attributes, locks, mail, pages,<br/>channels, npcs, quests, currency, bans")]
+        PLAY[("schema play<br/>sessions, events (RLS writer=mush)")]
+    end
+
+    RELAY["novagames-relay<br/>(pulls jobs, runs fixed template)"]
+    OLL["core3 Ollama"]
+
+    UI -->|"login, register, map"| REST
+    UI <-->|"command / output frames"| WS
+    AD -->|"stats, approve, link, AI status and switch"| REST
+    REST --> MUSH
+    REST --> AI
+    WS --> RLM
+    WS --> CP
+    CP --> MUSH
+    CP -->|"talk, ask, guide, @ai/*"| AI
+    AI --> Q
+    WS --> PL
+    CP -.->|"room, quest, credit events"| PL
+    PL --> PLAY
+    RELAY -->|"GET /relay/jobs (HMAC)"| Q
+    RELAY -->|"POST result (HMAC)"| Q
+    RELAY --> OLL
+```
+
+- Persistent world state is only in schema `mush`. NPC conversation history (last 10 exchanges, validated text only) is a column on `npcs`.
+- The relay queue, rate limiter, socket caps, the staff AI switch and AI counters are in process memory and reset on restart.
+- The per-player AI opt-out is the `NO_AI` flag on the player object, so it persists.
 
 ### A player command over the WebSocket
 
@@ -168,7 +241,7 @@ Everything below is taken from the current code in `backend/` and `frontend/`. G
 
 **Help.** In-game help topics stored in the database: `help`, `commands`, `channels`, `look`, `building`, `softcode`, `@npc/create`.
 
-**NPCs and the guide.** NPC objects with a personality, a knowledge base and a stored conversation history (last 10 exchanges). Lines come from the `mush.npc` relay template or a scripted fallback. See [AI options](#ai-options).
+**NPCs and the guide.** NPC objects with a personality, a knowledge base and a stored conversation history (last 10 exchanges). Lines come from the AI narrator through the `mush.npc` relay template, after output validation, or from a scripted fallback with a short hint. The `guide` answers how-to questions the same way, with keyword-matched scripted answers as its fallback. Staff can switch AI off for everyone and players for themselves. See [AI options](#ai-options).
 
 **Site account link hook.** `objects.site_account_id` (nullable, indexed) links a character to a Nova Games site account. Admins set it through the REST API. Nothing reads it yet.
 
@@ -176,7 +249,7 @@ Everything below is taken from the current code in `backend/` and `frontend/`. G
 
 ## Commands
 
-Commands are case-insensitive. `<...>` marks an argument. Admin means the GOD or WIZARD flag (the REST admin role also accepts ROYAL).
+Commands are case-insensitive. `<...>` marks an argument. Admin means the GOD or WIZARD flag for most commands; `@ai/on`, `@ai/off` and the REST admin role also accept ROYAL.
 
 | Area | Command | Notes |
 |---|---|---|
@@ -441,6 +514,7 @@ The order of checks is: Origin, handshake rate, socket caps, accept, `auth_requi
 - **On the Mac,** anything long-lived (for example a dev `SECRET_KEY`) lives in the macOS Keychain and is read into the environment at launch. `.env` is gitignored, and the NovaGames rsync excludes `*.env`, `*.db`, `.git` and virtualenvs, so nothing local is shipped to core3.
 - **The God password** is random on first start and written only to a 0600 file on the data volume. It is never logged.
 - **Relay requests are HMAC-signed** with a 60 s replay window and constant-time comparison. They can only reach the container from `games_internal`.
+- **AI is relay-only.** The game contains no model client, model URL or API key, and has no egress. Vars sent to the relay are clipped to the contract caps with control characters removed; the relay fences them as untrusted. Model output is validated (`validate_output`) before it is shown or stored, and the staff AI switch is admin-only, same-origin and audit-logged.
 - **XSS.** Usernames are validated at REST registration as well as WebSocket login (stored-XSS fix, 2206d87). Descriptions are checked for script and event-handler patterns. The frontend renders all user-controlled text with `textContent`.
 - **CSP.** The app sends the same strict headers Caddy sets, so a direct hit on the container is equally strict: `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`, plus `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, COOP and CORP `same-origin`, and a `Permissions-Policy` that disables camera, microphone, geolocation and payment. The frontend has no inline script, style or event handlers.
 - **Object control.** `@set`, `@describe`, `@destroy`, `@lock` and `@unlock` require control of the target, PennMUSH style: God controls everything, nobody else controls a GOD object, wizards control the rest, and a player controls itself and what it owns. WIZARD and ROYAL can only be granted by staff, GOD only by God, PENDING never by command, and a flag must be one bare name (no comma lists). This closed a self-promotion hole (`@set me=WIZARD`) on 2026-10-17; `tests/test_permissions.py` covers it.
@@ -466,7 +540,7 @@ deploy/deploy.sh mush      # build and roll out Web-Pennmush
 deploy/deploy.sh status    # docker compose ps for every service
 ```
 
-`deploy.sh mush` does the following:
+`deploy.sh mush` copies from the checkout at `/Volumes/Data/xcode/Web-Pennmush`, not from GitHub, so `git pull` there first. It does the following:
 
 1. Checks that `/Volumes/Data/xcode/Web-Pennmush/Dockerfile` exists (override the path with `PENNMUSH_DIR`).
 2. Rsyncs this repo to `kochj@192.168.1.5:/srv/games/src/web-pennmush/`, excluding `.git`, `*.db`, `*.env`, `.venv`, `venv`, `__pycache__` and `.pytest_cache`. It also syncs the platform repo to `/srv/games/repo`.
@@ -730,7 +804,7 @@ Web-Pennmush/
       locks.py           Lock expression evaluator and LockManager
       channels.py        Channels and the help system
       mail.py, pages.py, quests.py, economy.py, moderation.py
-      ai_manager.py      mush.npc job builder and scripted fallback
+      ai_manager.py      AI narrator: mush.npc jobs, toggles, health, retries, output validation, fallback
   frontend/
     index.html, admin.html
     css/style.css
