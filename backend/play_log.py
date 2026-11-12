@@ -7,6 +7,11 @@ player = character name) plus a few play.events rows for notable moments:
 rooms entered, quests started/advanced/completed, credits earned/spent.
 Says, poses and pages are only counted, never their text.
 
+Spectator (+watch) scenes get their own row: player "AI vs AI", registered under
+the key WATCH_KEY, summary.spectator = true and summary.matchup naming the NPC
+sides (kind "npc"). Anything computing human records must skip
+summary->>'spectator' = 'true'.
+
 Rules: it must never block, slow down or break a command. Hooks only touch
 memory; database writes run in background tasks on their own short
 connection, errors are logged and swallowed, and unsent events are retried on
@@ -35,6 +40,8 @@ MAX_PENDING = 200           # unsent events kept across failed flushes
 LIST_CAP = 50               # lists in the summary
 TEXT_CAP = 120              # names in events / summary
 END_RETRIES = 3
+WATCH_KEY = "watch"         # sessions key of the shared spectator scene (never a player id)
+WATCH_PLAYER = "AI vs AI"
 
 _UPSERT = text("""
 INSERT INTO play.sessions (id, game, client, player, started_at, last_seen_at, ended_at, outcome, actions, summary)
@@ -93,6 +100,8 @@ class PlaySession:
         self.lock = asyncio.Lock()
         self.task: Optional[asyncio.Task] = None   # the one in-flight flush (coalesces hooks)
         self.again = False
+        self.spectator = False
+        self.sides: Dict[str, dict] = {}            # spectator matchup, keyed by side
 
     # -- recording -----------------------------------------------------
     def _event(self, kind: str, **detail):
@@ -107,13 +116,24 @@ class PlaySession:
             self.dropped_events += len(self.pending) - MAX_PENDING
             del self.pending[:-MAX_PENDING]
 
-    def room(self, name: str):
+    def room(self, name: str, npc: Optional[str] = None):
         name = _clip(name)
         self.room_entries += 1
         self.end_room = name
         if name not in self.rooms and len(self.rooms) < LIST_CAP:
             self.rooms.append(name)
-        self._event("room", room=name)
+        self._event("room", room=name, **({"npc": _clip(npc)} if npc else {}))
+
+    def side(self, name: str, backend: Optional[str] = None, model: Optional[str] = None):
+        """Spectator matchup entry; backend/model stay null until an LLM drives that side."""
+        name = _clip(name)
+        cur = self.sides.get(name)
+        if cur is None:
+            if len(self.sides) >= LIST_CAP:
+                return
+            cur = self.sides[name] = {"side": name, "kind": "npc", "backend": None, "model": None, "label": name}
+        cur["backend"] = backend or cur["backend"]
+        cur["model"] = model or cur["model"]
 
     def quest(self, action: str, name: str, step: Optional[int] = None):
         name = _clip(name)
@@ -170,6 +190,9 @@ class PlaySession:
             "poses": self.poses,
             "pages": self.pages,
         }
+        if self.spectator:
+            s["spectator"] = True
+            s["matchup"] = {"sides": list(self.sides.values())}
         if self.outcome:
             s["outcome"] = self.outcome
         if self.dropped_events:
@@ -210,11 +233,13 @@ class PlayLog:
             return False
 
     # -- lifecycle (called from the WebSocket handler) -----------------
-    def start(self, player_id: int, player_name: str, start_room: Optional[str] = None) -> PlaySession:
+    def start(self, player_id, player_name: str, start_room: Optional[str] = None,
+              spectator: bool = False) -> PlaySession:
         old = self.sessions.get(player_id)
         if old is not None:  # a newer login replaced the old socket
             self.end(old, "reconnected")
         s = PlaySession(player_id, player_name, start_room)
+        s.spectator = spectator
         self.sessions[player_id] = s
         self._kick(s)
         return s
@@ -252,8 +277,8 @@ class PlayLog:
     def _get(self, player_id) -> Optional[PlaySession]:
         return self.sessions.get(player_id)
 
-    def room(self, player_id: int, name: str):
-        self._hook(player_id, "room", name)
+    def room(self, player_id, name: str, npc: Optional[str] = None):
+        self._hook(player_id, "room", name, npc)
 
     def quest(self, player_id: int, action: str, name: str, step: Optional[int] = None):
         self._hook(player_id, "quest", action, name, step)

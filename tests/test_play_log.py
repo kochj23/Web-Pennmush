@@ -464,6 +464,31 @@ class TestIntegrationPostgres:
                                             "WHERE session_id = :i ORDER BY seq", i=s.id)
         assert [e["room"] for e in ev] == ["Central Plaza", "Room Zero"]
 
+    @pytest.mark.asyncio
+    async def test_spectator_session_lands_and_is_excluded_from_human_stats(self, pgplay):
+        from backend.database import build_engine
+        eng = build_engine(pgplay.url)
+        log = PlayLog(eng)
+        try:
+            w = log.start(pl.WATCH_KEY, pl.WATCH_PLAYER, spectator=True)
+            w.side("Mira", backend="relay")
+            log.room(pl.WATCH_KEY, "Room Zero", npc="Mira")
+            log.end(w, "taken_over")
+            h = log.start(44, "Taker")
+            log.end(h)
+            await log.drain()
+        finally:
+            await eng.dispose()
+        r = (await _fetch(pgplay.super_url, "SELECT * FROM play.sessions WHERE id = :i", i=w.id))[0]
+        assert (r["game"], r["client"], r["player"], r["outcome"]) == ("mush", "web", "AI vs AI", "taken_over")
+        assert r["summary"]["matchup"]["sides"][0] == {"side": "Mira", "kind": "npc", "backend": "relay",
+                                                       "model": None, "label": "Mira"}
+        human = await _fetch(pgplay.super_url, "SELECT player FROM play.sessions WHERE id IN (:a, :b) AND "
+                                               "COALESCE(summary->>'spectator', 'false') <> 'true'", a=w.id, b=h.id)
+        assert [x["player"] for x in human] == ["Taker"]
+        ev = await _fetch(pgplay.super_url, "SELECT detail FROM play.events WHERE session_id = :i", i=w.id)
+        assert ev[0]["detail"] == {"room": "Room Zero", "npc": "Mira"}
+
     def test_vendored_schema_matches_platform(self):
         if not PLATFORM_SQL.exists():
             pytest.skip("NovaGames repo not checked out next to this one")

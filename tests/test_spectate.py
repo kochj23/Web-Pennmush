@@ -3,8 +3,9 @@ Spectator mode (+watch) in the seven project categories:
 Security, Performance, Retry, Unit, Integration, Functional, UI-state.
 
 The MUSH plays itself (autonomous NPC scene) while spectators watch read-only.
-Hard rules covered here: nothing is written to play history, spectators cannot
-issue game commands, AI toggles / NO_AI are respected and relay use is capped.
+Hard rules covered here: the scene is recorded as one "AI vs AI" spectator
+session (never under a human name, ends "stopped" or "taken_over"), spectators
+cannot issue game commands, AI toggles / NO_AI are respected and relay use is capped.
 Author: Jordan Koch (GitHub: kochj23)
 """
 import asyncio
@@ -22,7 +23,7 @@ from backend.engine import spectate
 from backend.engine.ai_manager import AIReply, SOURCE_AI, SOURCE_SCRIPTED, ai_manager
 from backend.engine.spectate import PACES, SceneDirector, director
 from backend.models import NPC, DBObject, ObjectType
-from backend.play_log import play_log
+from backend.play_log import WATCH_KEY, PlaySession, play_log
 from backend.security import rate_limiter
 from tests.test_play_log import FakeEngine, _register_and_token, _wait_for
 
@@ -174,6 +175,24 @@ class TestSecurity:
         assert ai_manager.enabled is True
 
 
+    def test_watch_row_never_carries_the_watchers_name(self, client, scene_db_app):
+        fake = FakeEngine()
+        play_log.engine = fake
+        play_log.sessions.clear()
+        try:
+            token = _register_and_token(client, "SecretViewer")
+            with client.websocket_connect("/ws", headers=ORIGIN) as ws:
+                _login(ws, token, watch=True)
+                client.portal.call(director.turn)
+                ws.send_json({"type": "disconnect"})
+            assert _wait_for(lambda: any(r["ended_at"] for r in fake.sessions.values()))
+        finally:
+            play_log.engine = None
+            play_log.sessions.clear()
+        assert "SecretViewer" not in str(fake.sessions) + str(fake.events)
+        assert {r["player"] for r in fake.sessions.values()} == {"AI vs AI"}
+
+
 # =============================================================================
 # PERFORMANCE (strict caps: turns per minute, relay jobs per 10 minutes)
 # =============================================================================
@@ -206,6 +225,15 @@ class TestPerformance:
         assert len(calls) == rate_limiter.limits["watch_ai"][0] == 20 < 30  # relay: 30 jobs/10 min/player
         assert {pid for pid, _ in calls} == {"watch"}  # one shared relay identity (mush-watch)
         assert all(len(v["player_says"]) <= 200 for _, v in calls)
+
+
+    def test_matchup_and_events_bounded(self):
+        s = PlaySession(WATCH_KEY, "AI vs AI")
+        s.spectator = True
+        for i in range(500):
+            s.side(f"npc{i}")
+            s.room("Plaza", npc=f"npc{i}")
+        assert len(s.summary()["matchup"]["sides"]) == 50 and s.seq == 300  # LIST_CAP, MAX_EVENTS
 
 
 # =============================================================================
@@ -248,6 +276,19 @@ class TestRetry:
         await asyncio.sleep(0.1)
         d.remove(1)
         assert {"type": "output", "message": "still going"} in ws.sent
+
+
+    @pytest.mark.asyncio
+    async def test_watch_session_end_retried_when_db_down(self, monkeypatch):
+        fake = FakeEngine(fail=2)
+        monkeypatch.setattr(play_log, "_engine", fake)
+        play_log.sessions.clear()
+        d = SceneDirector()
+        await d.add(1, FakeWS(), False, None)
+        d.remove(1)
+        await play_log.drain(10)
+        (row,) = fake.sessions.values()
+        assert (row["player"], row["outcome"]) == ("AI vs AI", "stopped") and row["summary"]["spectator"]
 
 
 # =============================================================================
@@ -295,6 +336,33 @@ class TestUnit:
             assert (await s.execute(select(func.count()).select_from(NPC))).scalar() == len(spectate._CAST)
 
 
+    def test_spectator_summary_keys(self):
+        s = PlaySession(WATCH_KEY, "AI vs AI")
+        s.spectator = True
+        s.side("Mira")
+        s.side("Pip")
+        s.side("Mira", backend="relay")
+        s.side("Mira")  # a later scripted line keeps what the relay filled in
+        assert s.summary()["matchup"] == {"sides": [
+            {"side": "Mira", "kind": "npc", "backend": "relay", "model": None, "label": "Mira"},
+            {"side": "Pip", "kind": "npc", "backend": None, "model": None, "label": "Pip"}]}
+        human = PlaySession(5, "Walker").summary()
+        assert "spectator" not in human and "matchup" not in human
+
+    @pytest.mark.asyncio
+    async def test_one_session_per_scene_run_and_only_last_spectator_ends_it(self):
+        play_log.sessions.clear()
+        d = SceneDirector()
+        await d.add(1, FakeWS(), False, None)
+        rec = play_log.sessions[WATCH_KEY]
+        await d.add(2, FakeWS(), False, None)
+        assert play_log.sessions[WATCH_KEY] is rec and rec.spectator
+        d.remove(1, outcome="taken_over")  # someone still watching: scene goes on
+        assert rec.ended_at is None
+        d.remove(2, outcome="taken_over")
+        assert rec.outcome == "taken_over" and WATCH_KEY not in play_log.sessions
+
+
 # =============================================================================
 # INTEGRATION (scene against the world DB)
 # =============================================================================
@@ -324,12 +392,36 @@ class TestIntegration:
         assert any(v["history"] for _, v in calls[1:]) or len(calls) == 1
 
 
+    @pytest.mark.asyncio
+    async def test_turns_recorded_as_events_and_relay_side(self, scene_db, monkeypatch):
+        calls = []
+        _healthy_ai(monkeypatch, calls)
+        await _npc(scene_db, "Pip")
+        play_log.sessions.clear()
+        rec = play_log.start(WATCH_KEY, "AI vs AI", spectator=True)
+        try:
+            d = SceneDirector(rng=Roll(0.1))
+            d.spectators[1] = (FakeWS(), False)
+            await d.turn()  # Pip leaves to Room Zero
+            d.rng = Roll(0.3)
+            await d.turn()  # emote
+            d.rng = Roll(0.9)
+            await d.turn()  # relay line
+        finally:
+            play_log.sessions.clear()
+        sm = rec.summary()
+        assert (rec.actions, sm["poses"], sm["says"]) == (3, 1, 1)
+        assert [(e["kind"], e["detail"]) for e in rec.pending] == [("room", '{"room":"Room Zero","npc":"Pip"}')]
+        assert sm["matchup"]["sides"] == [{"side": "Pip", "kind": "npc", "backend": "relay", "model": None,
+                                           "label": "Pip"}]
+
+
 # =============================================================================
-# FUNCTIONAL (hard rule: nothing reaches play history)
+# FUNCTIONAL (watch contract v2: the scene is recorded as an "AI vs AI" spectator session)
 # =============================================================================
 
 class TestFunctional:
-    def test_watch_login_and_scene_record_nothing(self, client, scene_db_app, monkeypatch):
+    def test_watch_login_records_one_ai_vs_ai_session(self, client, scene_db_app):
         fake = FakeEngine()
         play_log.engine = fake
         play_log.sessions.clear()
@@ -340,14 +432,23 @@ class TestFunctional:
                 lines = [client.portal.call(director.turn) for _ in range(8)]
                 assert any(lines)
                 ws.send_json({"type": "disconnect"})
+            assert _wait_for(lambda: any(r["ended_at"] for r in fake.sessions.values()))
             client.portal.call(play_log.drain)
         finally:
             play_log.engine = None
-        assert fake.sessions == {} and fake.events == [] and fake.writes == 0
+        (row,) = fake.sessions.values()  # no human session for a watch login
+        sm = row["summary"]
+        assert (row["game"], row["client"], row["player"], row["outcome"]) == ("mush", "web", "AI vs AI", "stopped")
+        assert sm["spectator"] is True and row["actions"] == 8
+        assert sm["matchup"]["sides"] and all(
+            sd["kind"] == "npc" and sd["label"] == sd["side"] and sd["side"] in ("Mira", "Tobin")
+            for sd in sm["matchup"]["sides"])
+        assert sm["says"] + sm["poses"] + sm["rooms_entered"] == 8
+        assert all(e["detail"]["npc"] in ("Mira", "Tobin") for e in fake.events if e["kind"] == "room")
         assert play_log.sessions == {}
         assert _wait_for(lambda: director.spectators == {})
 
-    def test_in_game_watch_ends_play_and_records_nothing_while_watching(self, client, scene_db_app):
+    def test_in_game_watch_then_take_over(self, client, scene_db_app):
         fake = FakeEngine()
         play_log.engine = fake
         play_log.sessions.clear()
@@ -359,22 +460,23 @@ class TestFunctional:
                 assert _cmd(ws, "+watch fast") == {"type": "watch", "watching": True, "pace": "fast",
                                                    "spectators": 1}
                 assert "Now watching" in ws.receive_json()["message"]
-                assert _wait_for(lambda: any(r["ended_at"] for r in fake.sessions.values()))
-                before = (dict(fake.sessions), list(fake.events))
-                for _ in range(8):
+                for _ in range(4):
                     client.portal.call(director.turn)
                 assert _cmd(ws, "say still here?")["type"] == "error"
-                assert (fake.sessions, fake.events) == before
-                (row,) = fake.sessions.values()
-                assert row["outcome"] == "watch" and row["actions"] == 1
                 assert _cmd(ws, "+watch stop")["watching"] is False
                 assert ws.receive_json()["type"] == "output"  # look
                 assert _cmd(ws, "look")["type"] == "output"  # playing again
+            assert _wait_for(lambda: len(fake.sessions) == 3 and all(r["ended_at"] for r in fake.sessions.values()))
             client.portal.call(play_log.drain)
         finally:
             play_log.engine = None
             play_log.sessions.clear()
-        assert len(fake.sessions) == 2  # before watching, after stopping; none for the watch itself
+        rows = sorted(fake.sessions.values(), key=lambda r: r["started_at"])
+        assert [(r["player"], r["outcome"]) for r in rows] == [
+            ("Switcher", "watch"), ("AI vs AI", "taken_over"), ("Switcher", "quit")]
+        assert rows[0]["actions"] == 1 and rows[1]["actions"] == 4 and rows[2]["actions"] == 1
+        assert [bool(r["summary"].get("spectator")) for r in rows] == [False, True, False]
+        assert rows[1]["ended_at"] <= rows[2]["started_at"]  # the human owns everything after the take-over
 
 
 @pytest.fixture
@@ -425,3 +527,17 @@ class TestUIState:
         assert [f["type"] for f in frames] == ["watch", "output", "watch", "output", "watch", "output", "output"]
         assert frames[2]["pace"] == "slow" and frames[4]["watching"] is False
         assert frames[3]["message"].startswith("Usage: +watch") and frames[6]["message"] == "You are not watching."
+
+    def test_watch_frames_unchanged_with_recording_on(self, client):
+        play_log.engine = FakeEngine()
+        try:
+            token = _register_and_token(client, "FramerRec")
+            with client.websocket_connect("/ws", headers=ORIGIN) as ws:
+                assert _login(ws, token, watch=True) == {"type": "watch", "watching": True, "pace": "normal",
+                                                         "spectators": 1}
+                assert _cmd(ws, "+watch stop") == {"type": "watch", "watching": False, "pace": "normal",
+                                                   "spectators": 0}
+                assert ws.receive_json()["type"] == "output"
+        finally:
+            play_log.engine = None
+            play_log.sessions.clear()

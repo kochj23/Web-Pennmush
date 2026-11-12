@@ -10,8 +10,14 @@ other while spectators watch read-only. NPC lines use the same relay path as
 Bounds: one scene task, one turn in flight, at most `watch_turn` turns per minute
 and `watch_ai` relay jobs per 10 minutes (security.rate_limiter, kept under the
 relay's 30 jobs/10 min per player). The task stops by itself when the last
-spectator leaves. Nothing here touches play_log: spectating and the autonomous
-scene are never written to Nova Games play history.
+spectator leaves.
+
+Recording (watch contract v2): each scene run is one play.sessions row, player
+"AI vs AI", summary.spectator = true, summary.matchup.sides = the NPCs that acted
+(kind "npc"; backend "relay" once the relay voiced them, model null because the
+relay picks it). NPC moves are room events, emotes/lines count as poses/says.
+The row ends "stopped" when the last spectator leaves, or "taken_over" when the
+last spectator takes the seat (+watch stop), whose normal session starts then.
 """
 import asyncio
 import random
@@ -21,6 +27,7 @@ from typing import Deque, Dict, Optional, Tuple
 from sqlalchemy import select
 
 from backend.models import NPC, DBObject, ObjectType
+from backend.play_log import WATCH_KEY, WATCH_PLAYER, play_log
 
 PACES = {"slow": 20.0, "normal": 10.0, "fast": 5.0}  # seconds between turns
 RELAY_ID = "watch"  # relay job player_id becomes "mush-watch"
@@ -69,16 +76,20 @@ class SceneDirector:
         self.spectators[player_id] = (websocket, opted_out)
         if room_id is not None:
             self.home_room = room_id
+        if WATCH_KEY not in play_log.sessions:
+            play_log.start(WATCH_KEY, WATCH_PLAYER, spectator=True)
         if self.task is None or self.task.done():
             self.task = asyncio.create_task(self._loop())
         await websocket.send_json(self.state())
 
-    def remove(self, player_id: int, websocket=None):
+    def remove(self, player_id: int, websocket=None, outcome: str = "stopped"):
         cur = self.spectators.get(player_id)
         if cur and (websocket is None or cur[0] is websocket):
             del self.spectators[player_id]
-        if not self.spectators and self.task is not None and not self.task.done():
-            self.task.cancel()  # auto-stop: nobody is watching
+        if not self.spectators:
+            if self.task is not None and not self.task.done():
+                self.task.cancel()  # auto-stop: nobody is watching
+            play_log.end(play_log.sessions.get(WATCH_KEY), outcome)
 
     def set_pace(self, pace: str) -> bool:
         if pace not in PACES:
@@ -127,6 +138,10 @@ class SceneDirector:
             if not rows:
                 return None
             npc, obj = self.rng.choice(rows)
+            rec = play_log.sessions.get(WATCH_KEY)
+            if rec is not None:
+                rec.side(obj.name)
+                play_log.command(rec)
             room = await om.get_object(obj.location_id)
             room_name = room.name if room else "somewhere"
             others = [o.name for _, o in rows if o.location_id == obj.location_id and o.id != obj.id]
@@ -136,8 +151,11 @@ class SceneDirector:
                 if exits:
                     ex = self.rng.choice(exits)
                     if await om.move_object(obj.id, ex.home_id):
+                        dest = await om.get_object(ex.home_id)
+                        play_log.room(WATCH_KEY, dest.name if dest else "somewhere", npc=obj.name)
                         return f"[{room_name}] {obj.name} leaves through {ex.name}."
             if roll < 0.45:
+                play_log.social(WATCH_KEY, "pose")
                 return f"[{room_name}] {obj.name} {self.rng.choice(_EMOTES)}"
             name, desc = obj.name, " ".join(filter(None, [npc.personality, npc.knowledge_base]))
             no_ai = om.has_flag(obj, "NO_AI")
@@ -151,6 +169,7 @@ class SceneDirector:
                   else "You are alone. Think aloud about this place.")
         text = await self._line(name, desc, room_name, partner or "the room", prompt, list(hist), no_ai)
         hist.append({"speaker": name, "text": text})
+        play_log.social(WATCH_KEY, "say")
         return f'[{room_name}] {name} says{" to " + partner if partner else ""}, "{text}"'
 
     async def _line(self, name, desc, room_name, partner, prompt, hist, no_ai) -> str:
@@ -162,6 +181,9 @@ class SceneDirector:
             reply = await ai_manager.npc_reply(RELAY_ID, ai_manager.build_npc_vars(
                 name, desc, room_name, partner, prompt, hist))
             if reply.source != SOURCE_SCRIPTED:
+                rec = play_log.sessions.get(WATCH_KEY)
+                if rec is not None:
+                    rec.side(name, backend="relay")  # only the relay voices NPCs
                 return reply.text
         return self.rng.choice(_CHATTER)
 

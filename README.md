@@ -5,7 +5,7 @@ A web-based MUSH server inspired by [PennMUSH](https://github.com/pennmush/pennm
 ![Build](https://github.com/kochj23/Web-Pennmush/actions/workflows/build.yml/badge.svg)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.12-blue)
-![Version](https://img.shields.io/badge/version-3.3.0-brightgreen)
+![Version](https://img.shields.io/badge/version-3.3.1-brightgreen)
 ![Tests](https://img.shields.io/badge/tests-554%20passed-brightgreen)
 
 It runs as the `mush` service of the Nova Games platform on nova-core3 and is served at **https://192.168.1.5:8443/mush/** (LAN only).
@@ -16,20 +16,24 @@ NPCs and the in-game guide are voiced by an AI narrator through the Nova Games r
 
 | | |
 |---|---|
-| Version | 3.3.0 (2026-11-12). See [CHANGELOG.md](CHANGELOG.md) |
+| Version | 3.3.1 (2026-11-12). See [CHANGELOG.md](CHANGELOG.md) |
 | Stack | Python 3.12, FastAPI, SQLAlchemy async (asyncpg / aiosqlite), uvicorn, plain JavaScript |
 | Where | nova-core3 container `novagames-mush`, behind Caddy at `/mush/`, deployed with `deploy/deploy.sh mush` from the NovaGames repo |
 | Data | Postgres 17 Games DB, schema `mush` (TLS verify-full, DML-only runtime role). Play history in the platform `play` schema |
 | AI | Relay only (`mush.npc` template). Staff and per-player on/off, real relay health, bounded retries, output validation, scripted fallback. See [AI options](#ai-options) |
 | Watch | `+watch` or the **Watch** button: NPCs wander, emote and talk to each other while you watch read-only. See [Spectator mode](#spectator-mode-watch) |
-| Tests | 554 passed (`python -m pytest -q`). CI on every push |
+| Tests | 562 passed (`python -m pytest -q`). CI on every push |
+
+### New in 3.3.1
+
+- Watch games are recorded (watch contract v2): each scene run is one `play.sessions` row with player `AI vs AI`, `summary.spectator = true` and `summary.matchup.sides` naming the NPCs (kind `npc`). It ends `stopped` when the last spectator leaves, or `taken_over` when the last spectator takes the seat with `+watch stop`, and a normal session starts for the human. See [Spectator mode](#spectator-mode-watch).
 
 ### New in 3.3.0
 
 - Spectator mode: `+watch [slow|normal|fast]`, the **Watch** button, or **Connect & Watch** on the login screen. The MUSH plays itself: active NPCs wander through exits, emote and talk to each other, and you watch read-only under a SPECTATING bar with pace and Stop controls.
 - NPC lines use the same relay path as `talk` (template `mush.npc`) under one shared relay identity, `mush-watch`. When AI is off, opted out or unavailable, they fall back to scripted chatter and emotes, so the scene keeps moving.
 - Strict caps: 6 NPC turns per minute, 20 relay jobs per 10 minutes (the relay allows 30 per player), one turn in flight. The scene stops by itself when the last spectator leaves.
-- Spectating is never written to play history, so Nova never reviews it.
+- Spectating was not written to play history (changed in 3.3.1: recorded as an `AI vs AI` spectator session).
 - Tests: the vendored `tests/play_schema.sql` was refreshed and the private test cluster creates the newer platform writer roles (`casting`, `stuntdriver_mac`, `gtnwchess_mac`).
 
 ### New in 3.2.0
@@ -411,7 +415,26 @@ To watch, type `+watch` in game, press **Watch** under Quick Commands, or log in
 - **Pace and caps.** The pace is `slow` (20 s), `normal` (10 s) or `fast` (5 s) between turns, and any spectator can change it. On top of that come the hard caps `watch_turn` (6 turns per minute) and `watch_ai` (20 relay jobs per 10 minutes, under the relay's 30 per player). Only one turn runs at a time, so the scene never has more than one relay job in flight.
 - **Auto-stop.** The task is cancelled as soon as the last spectator stops or disconnects.
 - **Empty world.** If the world has no NPCs at all, the first turn creates a small default cast (Mira, Old Tobin and Pip, owned by #1) in the spectator's room. After that, staff manage them like any NPC.
-- **Not play history.** A watch login opens no `play.sessions` row. Typing `+watch` during play ends the current session (outcome `watch`), and `+watch stop` starts a new one. Scene turns touch only NPC objects, never `play_log`, so nothing watched reaches Nova's reviews. `tests/test_spectate.py` proves this against a recording fake play-history engine.
+- **Recorded as AI vs AI.** Each scene run is one `play.sessions` row (game `mush`, client `web`, player `AI vs AI`, never the watcher's name) with `summary.spectator = true` and `summary.matchup = {"sides": [{"side", "kind": "npc", "backend", "model", "label"}]}`, one side per NPC that acted. `backend` is `relay` once the relay voiced that NPC and `model` stays null (the relay picks the model); scripted-only NPCs keep both null. Moves are `room` events with `{room, npc}`, emotes and lines count as `poses` and `says`, and each turn is one action. A watch login opens no human session; typing `+watch` during play ends the human session (outcome `watch`). The scene row ends `stopped` when the last spectator disconnects, or `taken_over` when the last spectator types `+watch stop`, which then starts a normal session for the human. While others are still watching, one viewer leaving does not end the scene. Human records must filter `summary->>'spectator' = 'true'`; the MUSH itself computes no records, leaderboards or stats from `play.sessions`.
+
+```mermaid
+flowchart TD
+    A["first spectator arrives<br/>(+watch or watch login)"] --> H["human's open session ends<br/>outcome 'watch' (none for a watch login)"]
+    H --> S["play.sessions row: game mush, client web<br/>player 'AI vs AI', summary.spectator = true"]
+    S --> T["scene turn: pick an NPC"]
+    T --> MU["matchup.sides += {side, kind npc, label}<br/>actions +1"]
+    MU --> K{"turn type"}
+    K -- move --> EV["event room {room, npc}"]
+    K -- emote --> PO["poses +1"]
+    K -- speak --> SA["says +1; relay line sets<br/>side backend 'relay' (model null)"]
+    EV --> N{"spectators left?"}
+    PO --> N
+    SA --> N
+    N -- yes --> T
+    N -- "no: last one disconnects" --> ST["ended_at, outcome 'stopped'"]
+    N -- "no: last one types +watch stop" --> TO["outcome 'taken_over'"]
+    TO --> HU["new normal session for the human<br/>(character name, no spectator flag)"]
+```
 
 ```mermaid
 flowchart TD
@@ -682,10 +705,10 @@ Every authenticated WebSocket session is recorded in the platform's shared `play
 | `add_credits` / `remove_credits` (transfers log both sides) | event `credits` `{amount, reason}`: positive earned, negative spent, reason = transaction type |
 | `say`, `pose`, `page` | counted only. The text of what anyone says or pages is never stored |
 | Each command | `actions` +1 in memory; `last_seen_at` / `actions` written at most every 30 s |
-| Spectating (`+watch`, watch login) and the autonomous NPC scene | nothing. `+watch` ends the open session with outcome `watch`, and `+watch stop` starts a new one |
+| Spectating (`+watch`, watch login) and the autonomous NPC scene | one `AI vs AI` row per scene run with `summary.spectator = true` and `summary.matchup`; NPC moves as `room` events `{room, npc}`. `+watch` ends the human's open session with outcome `watch`; the scene row ends `stopped`, or `taken_over` when the last spectator types `+watch stop` and a new human session starts |
 | Disconnect (`finally` of the socket handler) | `ended_at`, outcome `quit` (`reconnected` when a newer login replaced the socket) and the summary. App shutdown ends any open sessions the same way |
 
-Summary keys: `character, duration_s, commands, start_room, end_room, rooms_entered, unique_rooms, rooms_visited` (first 50 distinct), `quests_started, quests_completed` (50 each), `quest_steps, credits_earned, credits_spent, credits_delta, says, poses, pages, outcome`, and `events_dropped` when a cap was hit. At most 300 events per session; names are cut to 120 characters.
+Summary keys: `character, duration_s, commands, start_room, end_room, rooms_entered, unique_rooms, rooms_visited` (first 50 distinct), `quests_started, quests_completed` (50 each), `quest_steps, credits_earned, credits_spent, credits_delta, says, poses, pages, outcome`, `spectator` and `matchup` on watch rows, and `events_dropped` when a cap was hit. At most 300 events per session; names are cut to 120 characters.
 
 Logging never blocks or breaks a command. Hooks only update memory. One background task per session writes the session upsert (`ON CONFLICT (id) ... WHERE ended_at IS NULL`, so ended sessions stay immutable) and its pending events (`ON CONFLICT (session_id, seq) DO NOTHING`) on its own short pooled connection, bounded by a 5 s timeout. On failure the events are kept (newest 200) and resent with the next write; the final write retries 3 times with backoff. Errors are logged as warnings and swallowed. On SQLite (development and most tests) nothing is written.
 
@@ -814,7 +837,7 @@ Current result: **554 passed** (verified 2026-11-12 with a NovaGames checkout ne
 - Configuration: `pytest.ini` sets `asyncio_mode = auto`, `testpaths = tests`, and a 60 s per-test timeout (thread method).
 - `tests/conftest.py` sets `BCRYPT_ROUNDS=4`, `REGISTRATION_MODE=open`, a throwaway SQLite file DB under `tests/.data`, and test-only `SECRET_KEY` and `GOD_PASSWORD` values. Most tests use an in-memory SQLite engine. The process-wide rate limiter is cleared around every test.
 - Postgres integration tests (`tests/test_hardening.py`, via `tests/pg_cluster.py`) use `PG_TEST_URL` / `PG_TEST_MIGRATE_URL` if set. Otherwise they `initdb` a private cluster in a temp directory on a free loopback port, with SCRAM auth and the production role layout (`mush_owner` owns schema `mush`, `mush` gets DML only), and tear it down afterwards. `tests/test_play_log.py` also creates the platform `play` schema in that private cluster (from `../NovaGames/deploy/db/play.sql` when that checkout exists, else the vendored copy `tests/play_schema.sql`, which a test keeps in sync), so its Postgres tests need the private cluster rather than `PG_TEST_URL`. That needs `initdb`, `pg_ctl` and `psql` on `PATH` (Homebrew `postgresql@17` on the Mac; CI installs Ubuntu's `postgresql` and adds its `bin` directory to `PATH`). Without them those tests are skipped. They never touch any other Postgres.
-- Coverage areas: models, objects, commands, locks, channels, mail and pages, quests and economy, moderation, REST API, security (validation, rate limits, credential scanning), auth bypass, hardening (Origin, caps, frame limits, relay signing and fallback, softcode budget, Postgres TLS URL handling, real-Postgres seed and roles), the AI layer (`tests/test_ai_parity.py`: Security, Performance, Retry, Unit, Integration, Functional, Frame for the toggles, relay health, retries, output validation and scripted fallback), play history (`tests/test_play_log.py`: Security, Performance, Retry, Unit, Integration on real Postgres with row-level security, Functional over the WebSocket, Frame), spectator mode (`tests/test_spectate.py`: Security, Performance, Retry, Unit, Integration, Functional, UI-state; covers read-only enforcement, AI toggles and `NO_AI`, turn and relay caps, auto-stop, and nothing written to play history), and integration.
+- Coverage areas: models, objects, commands, locks, channels, mail and pages, quests and economy, moderation, REST API, security (validation, rate limits, credential scanning), auth bypass, hardening (Origin, caps, frame limits, relay signing and fallback, softcode budget, Postgres TLS URL handling, real-Postgres seed and roles), the AI layer (`tests/test_ai_parity.py`: Security, Performance, Retry, Unit, Integration, Functional, Frame for the toggles, relay health, retries, output validation and scripted fallback), play history (`tests/test_play_log.py`: Security, Performance, Retry, Unit, Integration on real Postgres with row-level security, Functional over the WebSocket, Frame), spectator mode (`tests/test_spectate.py`: Security, Performance, Retry, Unit, Integration, Functional, UI-state; covers read-only enforcement, AI toggles and `NO_AI`, turn and relay caps, auto-stop, and the `AI vs AI` spectator session with `stopped` / `taken_over`), and integration.
 - CI (`.github/workflows/build.yml`) runs on pushes and PRs to main: Python 3.12, Postgres binaries, `python -m pytest -q`, then `pip-audit -r requirements.txt`.
 
 ---

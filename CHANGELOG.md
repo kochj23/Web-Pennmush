@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.3.1] - 2026-11-12
+
+### Watch games are recorded (watch contract v2)
+
+#### Changed
+- The `+watch` scene is now recorded in play history: one `play.sessions` row per scene run (game `mush`, client `web`, player `AI vs AI`), `summary.spectator = true`, `summary.matchup.sides` with one `{side, kind: "npc", backend, model, label}` per NPC that acted (`backend` `relay` once the relay voiced it, `model` null). NPC moves are `room` events `{room, npc}`; emotes and lines count as `poses` / `says`
+- Outcome `stopped` when the last spectator leaves; `taken_over` when the last spectator takes the seat with `+watch stop`, which starts a normal session for the human
+- The MUSH computes no human records, leaderboards or stats from `play.sessions`; consumers must filter `summary->>'spectator' = 'true'`
+
+#### Tests
+- `tests/test_spectate.py` 26 tests (was 19) across all seven categories; `tests/test_play_log.py` adds a real-Postgres spectator row and exclusion-filter test
+
+```mermaid
+flowchart TD
+    A["first spectator arrives<br/>(+watch or watch login)"] --> H["human's open session ends<br/>outcome 'watch' (none for a watch login)"]
+    H --> S["play.sessions row: game mush, client web<br/>player 'AI vs AI', summary.spectator = true"]
+    S --> T["scene turn: pick an NPC"]
+    T --> MU["matchup.sides += {side, kind npc, label}<br/>actions +1"]
+    MU --> K{"turn type"}
+    K -- move --> EV["event room {room, npc}"]
+    K -- emote --> PO["poses +1"]
+    K -- speak --> SA["says +1; relay line sets<br/>side backend 'relay' (model null)"]
+    EV --> N{"spectators left?"}
+    PO --> N
+    SA --> N
+    N -- yes --> T
+    N -- "no: last one disconnects" --> ST["ended_at, outcome 'stopped'"]
+    N -- "no: last one types +watch stop" --> TO["outcome 'taken_over'"]
+    TO --> HU["new normal session for the human<br/>(character name, no spectator flag)"]
+```
+
 ## [3.3.0] - 2026-11-12
 
 ### Spectator mode (+watch)

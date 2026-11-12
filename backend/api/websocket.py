@@ -215,7 +215,7 @@ class _TooBig(Exception):
 
 async def _authenticate(websocket: WebSocket, ip: str) -> Tuple[Optional[DBObject], bool]:
     """First frame must be {"type":"auth", token} or {"type":"auth", username, password}.
-    An optional "watch": true starts the connection as a read-only spectator (no play session)."""
+    An optional "watch": true starts the connection as a read-only spectator (no human play session)."""
     try:
         auth_data = await _recv_json(websocket, settings.WS_AUTH_TIMEOUT_S)
     except asyncio.TimeoutError:
@@ -272,11 +272,13 @@ async def _start_play(websocket: WebSocket, player_id: int):
 
 async def _watch_command(websocket: WebSocket, player_id: int, command: str, play, watching: bool):
     """+watch [slow|normal|fast] starts watching or sets the pace; +watch stop returns to play.
-    Starting ends the current play session, so nothing watched is recorded."""
+    Starting ends the current play session (outcome "watch"); the scene is recorded as its own
+    "AI vs AI" spectator session. Stopping takes the seat: the last spectator out ends the scene
+    session "taken_over" and a normal session starts for the human."""
     arg = (command.split(None, 1)[1:] or [""])[0].strip().lower()
     if arg in ("stop", "off"):
         if watching:
-            director.remove(player_id, websocket)
+            director.remove(player_id, websocket, "taken_over")
             await websocket.send_json(director.state(watching=False))
             play = await _start_play(websocket, player_id)
         else:
@@ -345,7 +347,7 @@ async def handle_websocket(websocket: WebSocket):
             "player_name": player.name,
         })
 
-        if watching:  # spectator login: no play session, no "has connected" broadcast
+        if watching:  # spectator login: no human play session, no "has connected" broadcast
             await director.add(player_id, websocket, _opted_out(player), player.location_id)
         else:
             play = await _start_play(websocket, player_id)
