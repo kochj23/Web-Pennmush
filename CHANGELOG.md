@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.3.0] - 2026-11-12
+
+### Spectator mode (+watch)
+
+#### Added
+- `+watch [slow|normal|fast]` / `+watch stop`, a **Watch** button, **Connect & Watch** on the login screen (auth frame `"watch": true`) and a SPECTATING bar with pace and Stop controls. While watching, the session is read-only: game commands are refused before the parser
+- `backend/engine/spectate.py` `SceneDirector`: one shared scene task. Active NPCs wander through exits, emote and talk to each other. Lines go through the existing relay path (`ai_manager.npc_reply`, `mush.npc`, `validate_output`) under relay identity `mush-watch`, with scripted chatter and emotes when AI is off, opted out (`NO_AI` on the NPC or any spectator) or unavailable
+- Caps: `watch_turn` 6 turns/min and `watch_ai` 20 relay jobs/10 min (relay allows 30 per player), one turn in flight, auto-stop when the last spectator leaves
+- A default cast of three NPCs is created once, in the spectator's room, when the world has no NPCs at all
+- `tests/test_spectate.py`: 19 tests across Security, Performance, Retry, Unit, Integration, Functional and UI-state, including a proof that spectating and the scene write nothing to play history
+
+#### Changed
+- Spectating is never recorded in Nova Games play history. `+watch` ends the open play session (outcome `watch`), and `+watch stop` starts a new one
+
+#### Fixed
+- Test-only: refreshed the vendored `tests/play_schema.sql`, and the private test cluster now creates the newer platform writer roles (`casting`, `stuntdriver_mac`, `gtnwchess_mac`), so the Postgres play-history tests run again
+
 ## [3.2.0] - 2026-11-11
 
 ### AI parity (relay only)

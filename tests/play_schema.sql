@@ -48,16 +48,34 @@ ALTER TABLE play.events OWNER TO play_owner;
 ALTER TABLE play.sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE play.events ENABLE ROW LEVEL SECURITY;
 
--- Writers: each game's DML role, plus blompie_mac (the standalone Blompie Mac app: play rows only, no schema). Insert and update only their own rows; no DELETE (history is kept).
-GRANT USAGE ON SCHEMA play TO gtnw, cartest, blompie, mush, saves, blompie_mac;
-REVOKE ALL ON play.sessions, play.events FROM gtnw, cartest, blompie, mush, saves, blompie_mac;
-GRANT SELECT, INSERT, UPDATE ON play.sessions, play.events TO gtnw, cartest, blompie, mush, saves, blompie_mac;
+-- Writers: each game's DML role, plus blompie_mac, stuntdriver_mac and gtnwchess_mac (the standalone Blompie, Stunt Driver and GTNW Chess Mac apps; GTNW Chess writes game 'gtnwchess': play rows only, no schema). Insert and update only their own rows; no DELETE (history is kept).
+GRANT USAGE ON SCHEMA play TO gtnw, cartest, casting, blompie, mush, saves, blompie_mac, stuntdriver_mac, gtnwchess_mac;
+REVOKE ALL ON play.sessions, play.events FROM gtnw, cartest, casting, blompie, mush, saves, blompie_mac, stuntdriver_mac, gtnwchess_mac;
+GRANT SELECT, INSERT, UPDATE ON play.sessions, play.events TO gtnw, cartest, casting, blompie, mush, saves, blompie_mac, stuntdriver_mac, gtnwchess_mac;
 DROP POLICY IF EXISTS own_rows ON play.sessions;
-CREATE POLICY own_rows ON play.sessions FOR ALL TO gtnw, cartest, blompie, mush, saves, blompie_mac
+CREATE POLICY own_rows ON play.sessions FOR ALL TO gtnw, cartest, casting, blompie, mush, saves, blompie_mac, stuntdriver_mac, gtnwchess_mac
   USING (writer = current_user) WITH CHECK (writer = current_user);
 DROP POLICY IF EXISTS own_rows ON play.events;
-CREATE POLICY own_rows ON play.events FOR ALL TO gtnw, cartest, blompie, mush, saves, blompie_mac
+CREATE POLICY own_rows ON play.events FOR ALL TO gtnw, cartest, casting, blompie, mush, saves, blompie_mac, stuntdriver_mac, gtnwchess_mac
   USING (writer = current_user) WITH CHECK (writer = current_user);
+
+-- Review consent: whether a site account wants to be named (by display_name) in Nova's reviews of a game.
+-- Written only by games-saves (role saves) for the signed-in account; read by play_reader. Default is NOT named.
+CREATE TABLE IF NOT EXISTS play.consent (
+  account         text        NOT NULL CHECK (account ~ '^[a-z0-9_]{3,24}$'),
+  game            text        NOT NULL CHECK (game ~ '^[a-z0-9][a-z0-9_-]{0,31}$'),
+  name_in_reviews boolean     NOT NULL DEFAULT false,
+  display_name    text        CHECK (display_name IS NULL OR char_length(display_name) BETWEEN 1 AND 40),
+  writer          name        NOT NULL DEFAULT current_user,
+  updated_at      timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (account, game)
+);
+ALTER TABLE play.consent OWNER TO play_owner;
+ALTER TABLE play.consent ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON play.consent FROM PUBLIC, gtnw, cartest, casting, blompie, mush, saves, blompie_mac, stuntdriver_mac, gtnwchess_mac;
+GRANT SELECT, INSERT, UPDATE ON play.consent TO saves;
+DROP POLICY IF EXISTS own_rows ON play.consent;
+CREATE POLICY own_rows ON play.consent FOR ALL TO saves USING (writer = current_user) WITH CHECK (writer = current_user);
 
 -- Reader: Nova's game reporter. Read-only, play schema only.
 DO $$BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='play_reader') THEN CREATE ROLE play_reader LOGIN; END IF; END$$;
@@ -69,3 +87,7 @@ DROP POLICY IF EXISTS read_all ON play.sessions;
 CREATE POLICY read_all ON play.sessions FOR SELECT TO play_reader USING (true);
 DROP POLICY IF EXISTS read_all ON play.events;
 CREATE POLICY read_all ON play.events FOR SELECT TO play_reader USING (true);
+REVOKE ALL ON play.consent FROM play_reader;
+GRANT SELECT ON play.consent TO play_reader;
+DROP POLICY IF EXISTS read_all ON play.consent;
+CREATE POLICY read_all ON play.consent FOR SELECT TO play_reader USING (true);

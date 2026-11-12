@@ -10,7 +10,7 @@ import logging
 import time
 from collections import defaultdict
 from datetime import datetime
-from typing import Dict, Optional, Set
+from typing import Dict, Optional, Set, Tuple
 from urllib.parse import urlsplit
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -21,6 +21,7 @@ from backend.database import AsyncSessionLocal
 from backend.models import DBObject, ObjectType
 from backend.engine.commands import CommandParser
 from backend.engine.objects import ObjectManager
+from backend.engine.spectate import director, PACES
 from backend.play_log import play_log
 from backend.security import rate_limiter, input_validator, security_logger
 
@@ -212,16 +213,17 @@ class _TooBig(Exception):
     pass
 
 
-async def _authenticate(websocket: WebSocket, ip: str) -> Optional[DBObject]:
-    """First frame must be {"type":"auth", token} or {"type":"auth", username, password}."""
+async def _authenticate(websocket: WebSocket, ip: str) -> Tuple[Optional[DBObject], bool]:
+    """First frame must be {"type":"auth", token} or {"type":"auth", username, password}.
+    An optional "watch": true starts the connection as a read-only spectator (no play session)."""
     try:
         auth_data = await _recv_json(websocket, settings.WS_AUTH_TIMEOUT_S)
     except asyncio.TimeoutError:
         await websocket.send_json({"type": "error", "message": "Authentication timed out"})
-        return None
+        return None, False
     if auth_data.get("type") != "auth":
         await websocket.send_json({"type": "error", "message": "Authentication required"})
-        return None
+        return None, False
 
     async with AsyncSessionLocal() as session:
         token = auth_data.get("token")
@@ -230,12 +232,12 @@ async def _authenticate(websocket: WebSocket, ip: str) -> Optional[DBObject]:
             player = await session.get(DBObject, pid) if pid is not None else None
             if not player or player.type != ObjectType.PLAYER or auth.is_pending(player):
                 await websocket.send_json({"type": "error", "message": "Session expired. Please log in again."})
-                return None
+                return None, False
             from backend.engine.moderation import ModerationManager
             banned, _ = await ModerationManager(session).is_banned(player.id)
             if banned:
                 await websocket.send_json({"type": "error", "message": "This account is banned."})
-                return None
+                return None, False
         else:
             creds = {k: str(auth_data.get(k) or "") for k in ("username", "password")}
             result = await auth.authenticate(session, creds["username"], creds["password"], ip)
@@ -243,13 +245,58 @@ async def _authenticate(websocket: WebSocket, ip: str) -> Optional[DBObject]:
                 if result.status == 429:
                     security_logger.log_rate_limit_exceeded(ip, "login")
                 await websocket.send_json({"type": "error", "message": result.error})
-                return None
+                return None, False
             player = result.player
 
         player.is_connected = True
         player.last_login = datetime.utcnow()
         await session.commit()
-        return player
+        return player, auth_data.get("watch") is True
+
+
+def _opted_out(player: DBObject) -> bool:
+    from backend.engine.ai_manager import PLAYER_OPT_OUT_FLAG
+    return PLAYER_OPT_OUT_FLAG in [f.strip().upper() for f in (player.flags or "").split(",")]
+
+
+async def _start_play(websocket: WebSocket, player_id: int):
+    """Show the room and open a play-history session (normal play only, never while watching)."""
+    async with AsyncSessionLocal() as session:
+        fresh = await session.get(DBObject, player_id)
+        look_output = await CommandParser(session).cmd_look(fresh, "")
+        room = await session.get(DBObject, fresh.location_id) if fresh.location_id is not None else None
+    play = play_log.start(player_id, fresh.name, room.name if room else None)
+    await websocket.send_json({"type": "output", "message": look_output})
+    return play
+
+
+async def _watch_command(websocket: WebSocket, player_id: int, command: str, play, watching: bool):
+    """+watch [slow|normal|fast] starts watching or sets the pace; +watch stop returns to play.
+    Starting ends the current play session, so nothing watched is recorded."""
+    arg = (command.split(None, 1)[1:] or [""])[0].strip().lower()
+    if arg in ("stop", "off"):
+        if watching:
+            director.remove(player_id, websocket)
+            await websocket.send_json(director.state(watching=False))
+            play = await _start_play(websocket, player_id)
+        else:
+            await websocket.send_json({"type": "output", "message": "You are not watching."})
+        return play, False
+    if arg not in ("", "on", "start") and arg not in PACES:
+        await websocket.send_json({"type": "output", "message": "Usage: +watch [slow|normal|fast] | +watch stop"})
+        return play, watching
+    director.set_pace(arg)
+    if watching:
+        await websocket.send_json(director.state())
+        return play, True
+    play_log.end(play, "watch")
+    async with AsyncSessionLocal() as session:
+        player = await session.get(DBObject, player_id)
+        opted_out, room_id = _opted_out(player), player.location_id
+    await director.add(player_id, websocket, opted_out, room_id)
+    await websocket.send_json({"type": "output", "message": "Now watching the MUSH play itself. "
+                               "Read-only until you stop (+watch stop)."})
+    return None, True
 
 
 async def handle_websocket(websocket: WebSocket):
@@ -280,7 +327,7 @@ async def handle_websocket(websocket: WebSocket):
         await websocket.accept()
         await websocket.send_json({"type": "auth_required", "message": "Please authenticate"})
 
-        player = await _authenticate(websocket, ip)
+        player, watching = await _authenticate(websocket, ip)
         if player is None:
             await websocket.close(code=POLICY_VIOLATION)
             return
@@ -298,16 +345,13 @@ async def handle_websocket(websocket: WebSocket):
             "player_name": player.name,
         })
 
-        async with AsyncSessionLocal() as session:
-            fresh = await session.get(DBObject, player_id)
-            look_output = await CommandParser(session).cmd_look(fresh, "")
-            room = await session.get(DBObject, fresh.location_id) if fresh.location_id is not None else None
-        play = play_log.start(player_id, player.name, room.name if room else None)
-        await websocket.send_json({"type": "output", "message": look_output})
-
-        if player.location_id:
-            await manager.broadcast_to_room(f"{player.name} has connected.", player.location_id,
-                                            exclude_player_id=player.id)
+        if watching:  # spectator login: no play session, no "has connected" broadcast
+            await director.add(player_id, websocket, _opted_out(player), player.location_id)
+        else:
+            play = await _start_play(websocket, player_id)
+            if player.location_id:
+                await manager.broadcast_to_room(f"{player.name} has connected.", player.location_id,
+                                                exclude_player_id=player.id)
 
         frames = FrameLimiter(settings.WS_FRAMES_PER_10S)
         while True:
@@ -342,6 +386,13 @@ async def handle_websocket(websocket: WebSocket):
                 if not is_valid:
                     await websocket.send_json({"type": "error", "message": error})
                     continue
+                if command.split(None, 1)[0].lower() == "+watch":
+                    play, watching = await _watch_command(websocket, player_id, command, play, watching)
+                    continue
+                if watching:  # read-only: spectators never reach the command parser
+                    await websocket.send_json({"type": "error", "message": "You are spectating (read-only). "
+                                               "Use '+watch stop' or the Stop button to play."})
+                    continue
                 async with AsyncSessionLocal() as session:
                     current = await session.get(DBObject, player_id)
                     if current is None:
@@ -361,6 +412,7 @@ async def handle_websocket(websocket: WebSocket):
     except Exception as e:  # never leak internals to the client
         log.warning("websocket error: %s", type(e).__name__)
     finally:
+        director.remove(player_id, websocket)
         play_log.end(play, "quit")
         manager.release(ip)
         if websocket in manager.session_map:

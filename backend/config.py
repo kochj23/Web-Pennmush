@@ -21,7 +21,7 @@ class Settings(BaseSettings):
 
     # Application
     APP_NAME: str = "Web-Pennmush"
-    APP_VERSION: str = "3.2.0"
+    APP_VERSION: str = "3.3.0"
     DEBUG: bool = False
 
     # Server (container overrides HOST to 0.0.0.0; local default stays on loopback)

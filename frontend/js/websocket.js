@@ -78,7 +78,7 @@ class WebSocketManager {
     /**
      * Authenticate with the server
      */
-    authenticate(username, password, token) {
+    authenticate(username, password, token, watch = false) {
         return new Promise((resolve, reject) => {
             if (!this.connected) {
                 reject(new Error('Not connected to server'));
@@ -100,8 +100,10 @@ class WebSocketManager {
 
             // Prefer the session token from the REST login (password never
             // travels over the socket then).
-            this.send(token ? { type: 'auth', token: token }
-                            : { type: 'auth', username: username, password: password });
+            const frame = token ? { type: 'auth', token: token }
+                                : { type: 'auth', username: username, password: password };
+            if (watch) frame.watch = true; // read-only spectator, no play session
+            this.send(frame);
         });
     }
 

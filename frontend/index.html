@@ -44,6 +44,7 @@
                     <button data-cmd="who">Who</button>
                     <button data-cmd="channel/list">Channels</button>
                     <button data-cmd="help">Help</button>
+                    <button id="watch-button" title="Watch the NPCs play (read-only)">Watch</button>
                 </div>
             </div>
 
@@ -56,6 +57,17 @@
 
         <!-- Main Content - Output and Input -->
         <main class="main-content">
+            <div id="watch-bar" class="watch-bar" hidden>
+                <span class="spectating">SPECTATING</span>
+                <span>read-only</span>
+                <label for="watch-pace">Pace</label>
+                <select id="watch-pace">
+                    <option value="slow">Slow</option>
+                    <option value="normal" selected>Normal</option>
+                    <option value="fast">Fast</option>
+                </select>
+                <button id="watch-stop">Stop</button>
+            </div>
             <div class="output-container">
                 <div id="output" class="output"></div>
             </div>
@@ -117,6 +129,7 @@
                         <input type="password" id="login-password" required autocomplete="current-password">
                     </div>
                     <button type="submit" class="btn-primary">Connect</button>
+                    <button type="button" id="login-watch" class="btn-secondary">Connect &amp; Watch</button>
                     <div id="login-error" class="error-message"></div>
                 </form>
                 <div class="login-help">
@@ -148,7 +161,7 @@
 
     <!-- Footer -->
     <footer class="footer">
-        <span>Web-Pennmush v3.0.0 by Jordan Koch</span>
+        <span>Web-Pennmush v3.3.0 by Jordan Koch</span>
         <span>|</span>
         <span>Inspired by PennMUSH</span>
         <span>|</span>

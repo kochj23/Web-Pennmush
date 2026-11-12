@@ -15,7 +15,7 @@ class TestSettings:
 
     def test_default_version(self):
         s = Settings()
-        assert s.APP_VERSION == "3.2.0"
+        assert s.APP_VERSION == "3.3.0"
 
     def test_default_host_and_port(self):
         assert Settings.model_fields["HOST"].default == "127.0.0.1"

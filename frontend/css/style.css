@@ -586,3 +586,51 @@ kbd {
     border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 4px; cursor: pointer;
 }
 .map-error { padding: 1rem; color: var(--error-color); text-align: center; }
+
+/* ==================== SPECTATOR MODE (+watch) ==================== */
+
+.btn-secondary {
+    width: 100%;
+    margin-top: 0.5rem;
+    background: transparent;
+    color: var(--text-accent);
+    border: 1px solid var(--text-accent);
+    border-radius: 8px;
+    padding: 0.6rem;
+    font-family: inherit;
+    cursor: pointer;
+}
+
+.watch-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-bottom: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--warning-color);
+    border-radius: 8px;
+    background: rgba(255, 170, 0, 0.1);
+    color: var(--text-primary);
+}
+
+.watch-bar[hidden] {
+    display: none;
+}
+
+.watch-bar select,
+.watch-bar button {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 0.25rem 0.5rem;
+    font-family: inherit;
+    cursor: pointer;
+}
+
+.spectating {
+    color: var(--warning-color);
+    font-weight: bold;
+    letter-spacing: 0.1em;
+}

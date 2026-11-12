@@ -1067,7 +1067,7 @@ class TestFastAPIRoutes:
         resp = await app_client.get("/health")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["version"] == "3.2.0"
+        assert data["version"] == "3.3.0"
 
 
 class TestSeededWorldIntegrity:

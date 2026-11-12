@@ -39,6 +39,8 @@ class RateLimiter:
             "channel": (10, 60),  # 10 channel messages per 60 seconds
             "ai": (5, 60),  # 5 AI requests per 60 seconds
             "ai_hour": (20, 3600),  # 20 NPC lines per player per hour
+            "watch_turn": (6, 60),  # autonomous +watch scene: 6 NPC turns per minute
+            "watch_ai": (20, 600),  # +watch relay jobs per 10 min (relay allows 30 per player)
         }
 
     @staticmethod

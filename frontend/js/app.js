@@ -71,6 +71,9 @@ function setupWebSocketHandlers() {
         }
     });
 
+    // Spectator mode state (+watch): SPECTATING bar on, input off (read-only)
+    wsManager.on('watch', (data) => setWatching(data.watching, data.pace));
+
     // Handle output from server
     wsManager.on('output', (data) => {
         addOutput('');
@@ -85,6 +88,7 @@ function setupWebSocketHandlers() {
 
     // Handle disconnect
     wsManager.onDisconnect = () => {
+        setWatching(false);
         setInputEnabled(false);
         currentPlayer = null;
         updatePlayerName('');
@@ -140,6 +144,14 @@ function setupStaticHandlers() {
     if (refresh) refresh.addEventListener('click', () => roomMapVisualizer.loadMap(0, 3));
     const loginForm = document.getElementById('login-form');
     if (loginForm) loginForm.addEventListener('submit', handleLogin);
+    const loginWatch = document.getElementById('login-watch');
+    if (loginWatch) loginWatch.addEventListener('click', (e) => handleLogin(e, true));
+    const watchBtn = document.getElementById('watch-button');
+    if (watchBtn) watchBtn.addEventListener('click', () => sendCommand('+watch'));
+    const watchStop = document.getElementById('watch-stop');
+    if (watchStop) watchStop.addEventListener('click', () => sendCommand('+watch stop'));
+    const watchPace = document.getElementById('watch-pace');
+    if (watchPace) watchPace.addEventListener('change', () => sendCommand('+watch ' + watchPace.value));
     const registerForm = document.getElementById('register-form');
     if (registerForm) registerForm.addEventListener('submit', handleRegister);
 }
@@ -199,7 +211,7 @@ function sendCommand(command) {
 /**
  * Handle login form submission
  */
-async function handleLogin(event) {
+async function handleLogin(event, watch = false) {
     event.preventDefault();
 
     const username = document.getElementById('login-username').value;
@@ -207,7 +219,7 @@ async function handleLogin(event) {
 
     try {
         const session = await restLogin(username, password);
-        await wsManager.authenticate(null, null, session.token);
+        await wsManager.authenticate(null, null, session.token, watch);
         // Success is handled by the 'welcome' message handler
     } catch (error) {
         showError('login-error', error.message);
@@ -258,6 +270,20 @@ async function handleRegister(event) {
     } catch (error) {
         showError('register-error', error.message);
     }
+}
+
+/**
+ * Spectator mode UI: show the SPECTATING bar and make the session read-only.
+ */
+function setWatching(watching, pace) {
+    const bar = document.getElementById('watch-bar');
+    if (bar) bar.hidden = !watching;
+    const paceSel = document.getElementById('watch-pace');
+    if (paceSel && pace) paceSel.value = pace;
+    const watchBtn = document.getElementById('watch-button');
+    if (watchBtn) watchBtn.disabled = !!watching;
+    document.body.classList.toggle('spectating-mode', !!watching);
+    setInputEnabled(!watching && wsManager.authenticated);
 }
 
 /**

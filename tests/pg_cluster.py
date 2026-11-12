@@ -80,7 +80,7 @@ class PgCluster:
         if not self.dir:
             raise RuntimeError("play schema needs a private cluster (superuser access)")
         env = dict(os.environ, PGPASSWORD="superpw")
-        roles = ("gtnw", "cartest", "blompie", "saves", "blompie_mac")
+        roles = ("gtnw", "cartest", "casting", "blompie", "saves", "blompie_mac", "stuntdriver_mac", "gtnwchess_mac")
         pre = " ".join(f"IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='{r}') THEN CREATE ROLE {r} NOLOGIN; END IF;"
                        for r in roles)
         subprocess.run(["psql", "-h", "127.0.0.1", "-p", str(self.port), "-U", "postgres", "-d", "games",
