@@ -5,8 +5,8 @@ A web-based MUSH server inspired by [PennMUSH](https://github.com/pennmush/pennm
 ![Build](https://github.com/kochj23/Web-Pennmush/actions/workflows/build.yml/badge.svg)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.12-blue)
-![Version](https://img.shields.io/badge/version-3.6.0-brightgreen)
-![Tests](https://img.shields.io/badge/tests-598%20passed-brightgreen)
+![Version](https://img.shields.io/badge/version-3.6.1-brightgreen)
+![Tests](https://img.shields.io/badge/tests-607%20passed-brightgreen)
 
 It runs as the `mush` service of the Nova Games platform on nova-core3 and is served at **https://192.168.1.5:8443/mush/** (LAN only).
 
@@ -16,13 +16,17 @@ NPCs and the in-game guide are voiced by an AI narrator through the Nova Games r
 
 | | |
 |---|---|
-| Version | 3.6.0 (2026-11-19). See [CHANGELOG.md](CHANGELOG.md) |
+| Version | 3.6.1 (2026-11-19). See [CHANGELOG.md](CHANGELOG.md) |
 | Stack | Python 3.12, FastAPI, SQLAlchemy async (asyncpg / aiosqlite), uvicorn, plain JavaScript |
 | Where | nova-core3 container `novagames-mush`, behind Caddy at `/mush/`, deployed with `deploy/deploy.sh mush` from the NovaGames repo |
 | Data | Postgres 17 Games DB, schema `mush` (TLS verify-full, DML-only runtime role). Play history in the platform `play` schema |
 | AI | Relay only (`mush.npc` template). Staff and per-player on/off, real relay health, bounded retries, output validation, scripted fallback. See [AI options](#ai-options) |
 | Watch | `+watch` or the **Watch** button: NPCs wander, emote and talk to each other while you watch read-only. See [Spectator mode](#spectator-mode-watch) |
-| Tests | 598 passed (`python -m pytest -q`). CI on every push |
+| Tests | 607 passed (`python -m pytest -q`). CI on every push |
+
+### New in 3.6.1
+
+- Accessible client: labelled command input, game output as a polite live region, keyboard-reachable exits, map rooms and login tabs, a skip link, visible focus styles and `prefers-reduced-motion` support. See [Accessibility](#features).
 
 ### New in 3.6.0
 
@@ -250,6 +254,8 @@ Everything below is taken from the current code in `backend/` and `frontend/`. G
 **World model.** Rooms, things, exits and players are rows in one `objects` table (types ROOM, THING, EXIT, PLAYER, GARBAGE), with comma-separated flags, aliases, owner, location and home. Attributes, locks, mail, pages, channels, channel memberships, help topics, NPCs, quests, quest steps, quest progress, player currency, transactions and ban records have their own tables (`backend/models.py`). Destroyed objects become GARBAGE (soft delete). The first start seeds Room Zero (#0), the God player One (#1), Central Plaza (#2, the starting room), a portal and void exit pair, a "magic crystal" with sample attributes, the Public (`pub`), Newbie (`new`) and Builder (`build`) channels, and seven help topics.
 
 **Frontend** (`frontend/index.html`, `js/app.js`, `js/websocket.js`, `js/ui.js`). Login and registration modal (with an invite-code field), output window, command input with Up/Down history, room panel (name, exits, contents), players-online list refreshed every 30 s, activity log, connection status, and reconnect (5 attempts, 3 s apart). Login goes through REST. The token it returns authenticates the WebSocket, so the password never travels over the socket. All user-controlled text is rendered with `textContent`. There are no inline scripts, styles or handlers, so the page works under the strict CSP.
+
+**Accessibility.** The command input has a (visually hidden) label and points at the key help with `aria-describedby`. Game text goes to a `role="log"` region with `aria-live="polite"`, so screen readers announce new output without interrupting; connection status is a polite status region and login/registration errors are `role="alert"`. Every control is a native `<button>` (quick commands, exits, Watch, map refresh), map rooms are focusable and open with Enter or Space, and the login dialog is a labelled `role="dialog"` with ARIA tabs (Left/Right/Home/End) and focus moved into it. A skip link jumps to the command input. Keyboard focus is always visible (`:focus-visible` outline), and `prefers-reduced-motion: reduce` turns transitions and animations off. `tests/test_frontend_a11y.py` checks the served HTML, CSS and JS.
 
 **Room map** (`frontend/js/roommap.js`, `GET /api/rooms/map`). An SVG graph of rooms and exits drawn with a small built-in force layout (no D3 or other library). The current room is highlighted. Players get a radius of up to 3 around their own location. Admins can choose any centre and a radius up to 10. The breadth-first search stops at 200 nodes, and DARK rooms are hidden from non-admins.
 
@@ -503,7 +509,7 @@ flowchart TD
 
 ## Rate limits and connection caps
 
-In-memory sliding windows (`backend/security.py`), bounded to 50,000 keys with the oldest evicted first. A restart clears them. They are per process, which matches the single uvicorn worker.
+In-memory sliding windows (`backend/security.py`), bounded to 50,000 keys with the oldest evicted first. They are per process, which matches the single uvicorn worker. Since 3.6.0, `login_ip`, `login_user` and `register_ip` hits are also stored in `rate_limit_hits` and reloaded at startup, so a restart does not clear those three; the others reset on restart.
 
 | Key | Limit | Applies to |
 |---|---|---|

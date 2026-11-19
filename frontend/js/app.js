@@ -137,8 +137,18 @@ function setupStaticHandlers() {
     document.querySelectorAll('[data-cmd]').forEach(btn => {
         btn.addEventListener('click', () => sendCommand(btn.dataset.cmd));
     });
-    document.querySelectorAll('[data-tab]').forEach(btn => {
+    const tabButtons = Array.from(document.querySelectorAll('[data-tab]'));
+    tabButtons.forEach((btn, i) => {
         btn.addEventListener('click', () => showTab(btn.dataset.tab));
+        // WAI-ARIA tabs: Left/Right (and Home/End) move between tabs.
+        btn.addEventListener('keydown', (e) => {
+            const moves = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: tabButtons.length - 1 };
+            if (!(e.key in moves)) return;
+            e.preventDefault();
+            const next = tabButtons[(moves[e.key] + tabButtons.length) % tabButtons.length];
+            showTab(next.dataset.tab);
+            next.focus();
+        });
     });
     const refresh = document.getElementById('refresh-map');
     if (refresh) refresh.addEventListener('click', () => roomMapVisualizer.loadMap(0, 3));

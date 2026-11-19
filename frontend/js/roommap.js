@@ -128,10 +128,21 @@ class RoomMapVisualizer {
             group.appendChild(text);
             group.appendChild(title);
 
-            // Click handler
-            group.addEventListener('click', () => {
+            // Click handler; also focusable and Enter/Space-activated for keyboard users
+            const activate = () => {
                 addOutput(`Viewing room: ${node.name} (#${node.id})`);
                 sendCommand(`look`);
+            };
+            group.setAttribute('tabindex', '0');
+            group.setAttribute('role', 'button');
+            group.setAttribute('aria-label', `Room ${node.name} (#${node.id})`);
+            group.classList.add('map-node');
+            group.addEventListener('click', activate);
+            group.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    activate();
+                }
             });
 
             this.svg.appendChild(group);

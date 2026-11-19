@@ -91,11 +91,14 @@ function updateExitsList(exits) {
 
     exitsListDiv.innerHTML = '';
     exits.forEach(exit => {
-        const exitDiv = document.createElement('div');
-        exitDiv.textContent = `→ ${exit}`;
-        exitDiv.style.cursor = 'pointer';
-        exitDiv.onclick = () => sendCommand(exit);
-        exitsListDiv.appendChild(exitDiv);
+        // A real button: reachable with Tab, activated with Enter/Space.
+        const exitButton = document.createElement('button');
+        exitButton.type = 'button';
+        exitButton.className = 'exit-link';
+        exitButton.textContent = `→ ${exit}`;
+        exitButton.setAttribute('aria-label', `Go ${exit}`);
+        exitButton.addEventListener('click', () => sendCommand(exit));
+        exitsListDiv.appendChild(exitButton);
     });
 }
 
@@ -171,6 +174,9 @@ function showModal(modalId) {
     const modal = document.getElementById(modalId);
     if (modal) {
         modal.style.display = 'flex';
+        // Move keyboard focus into the dialog.
+        const first = modal.querySelector('input:not([disabled]), button:not([disabled])');
+        if (first) first.focus();
     }
 }
 
@@ -201,12 +207,13 @@ function showTab(tabName) {
         tab.classList.add('active');
     }
 
-    // Activate button
+    // Activate button (roving tabindex + aria-selected for assistive tech)
     const buttons = document.querySelectorAll('.tab-button');
     buttons.forEach(button => {
-        if (button.dataset.tab === tabName) {
-            button.classList.add('active');
-        }
+        const selected = button.dataset.tab === tabName;
+        button.classList.toggle('active', selected);
+        button.setAttribute('aria-selected', String(selected));
+        button.tabIndex = selected ? 0 : -1;
     });
 }
 

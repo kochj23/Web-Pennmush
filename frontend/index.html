@@ -7,12 +7,14 @@
     <link rel="stylesheet" href="static/css/style.css">
 </head>
 <body>
+    <a href="#command-input" class="skip-link">Skip to command input</a>
+
     <!-- Header -->
     <header class="header">
         <h1>Web-Pennmush</h1>
         <div class="header-info">
             <span id="player-name"></span>
-            <span id="connection-status" class="status-disconnected">Disconnected</span>
+            <span id="connection-status" class="status-disconnected" role="status" aria-live="polite">Disconnected</span>
         </div>
     </header>
 
@@ -20,8 +22,8 @@
     <div class="container">
         <!-- Sidebar Left - Room Info -->
         <aside class="sidebar sidebar-left">
-            <div class="panel">
-                <h2>Current Location</h2>
+            <section class="panel" aria-labelledby="location-heading">
+                <h2 id="location-heading">Current Location</h2>
                 <div id="room-info" class="room-info">
                     <div class="room-name">Not connected</div>
                     <div class="room-description"></div>
@@ -34,30 +36,30 @@
                         <div id="contents-list"></div>
                     </div>
                 </div>
-            </div>
+            </section>
 
             <div class="panel">
-                <h2>Quick Commands</h2>
-                <div class="quick-commands">
-                    <button data-cmd="look">Look</button>
-                    <button data-cmd="inventory">Inventory</button>
-                    <button data-cmd="who">Who</button>
-                    <button data-cmd="channel/list">Channels</button>
-                    <button data-cmd="help">Help</button>
-                    <button id="watch-button" title="Watch the NPCs play (read-only)">Watch</button>
+                <h2 id="quick-heading">Quick Commands</h2>
+                <div class="quick-commands" role="group" aria-labelledby="quick-heading">
+                    <button type="button" data-cmd="look">Look</button>
+                    <button type="button" data-cmd="inventory">Inventory</button>
+                    <button type="button" data-cmd="who">Who</button>
+                    <button type="button" data-cmd="channel/list">Channels</button>
+                    <button type="button" data-cmd="help">Help</button>
+                    <button type="button" id="watch-button" title="Watch the NPCs play (read-only)">Watch</button>
                 </div>
             </div>
 
             <div class="panel">
-                <h2>Room Map</h2>
-                <div id="room-map-container"></div>
-                <button id="refresh-map" class="map-refresh">Refresh Map</button>
+                <h2 id="map-heading">Room Map</h2>
+                <div id="room-map-container" role="group" aria-labelledby="map-heading"></div>
+                <button type="button" id="refresh-map" class="map-refresh">Refresh Map</button>
             </div>
         </aside>
 
         <!-- Main Content - Output and Input -->
         <main class="main-content">
-            <div id="watch-bar" class="watch-bar" hidden>
+            <div id="watch-bar" class="watch-bar" hidden role="region" aria-label="Spectator controls">
                 <span class="spectating">SPECTATING</span>
                 <span>read-only</span>
                 <label for="watch-pace">Pace</label>
@@ -66,25 +68,27 @@
                     <option value="normal" selected>Normal</option>
                     <option value="fast">Fast</option>
                 </select>
-                <button id="watch-stop">Stop</button>
+                <button type="button" id="watch-stop">Stop</button>
             </div>
             <div class="output-container">
-                <div id="output" class="output"></div>
+                <div id="output" class="output" role="log" aria-live="polite" aria-relevant="additions text" aria-label="Game output" tabindex="0"></div>
             </div>
 
             <div class="input-container">
+                <label for="command-input" class="visually-hidden">Command</label>
                 <input
                     type="text"
                     id="command-input"
                     class="command-input"
                     placeholder="Enter command..."
                     autocomplete="off"
+                    aria-describedby="input-help"
                     disabled
                 />
-                <button id="send-button" class="send-button" disabled>Send</button>
+                <button type="button" id="send-button" class="send-button" disabled>Send</button>
             </div>
 
-            <div class="input-help">
+            <div class="input-help" id="input-help">
                 Press <kbd>↑</kbd>/<kbd>↓</kbd> for command history | <kbd>Tab</kbd> for autocomplete
             </div>
         </main>
@@ -108,17 +112,17 @@
     </div>
 
     <!-- Login Modal -->
-    <div id="login-modal" class="modal">
+    <div id="login-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="login-title">
         <div class="modal-content">
-            <h2>Connect to Web-Pennmush</h2>
+            <h2 id="login-title">Connect to Web-Pennmush</h2>
 
-            <div class="tabs">
-                <button class="tab-button active" data-tab="login">Login</button>
-                <button class="tab-button" data-tab="register">Register</button>
+            <div class="tabs" role="tablist" aria-label="Account">
+                <button type="button" class="tab-button active" id="tab-login" data-tab="login" role="tab" aria-selected="true" aria-controls="login-tab">Login</button>
+                <button type="button" class="tab-button" id="tab-register" data-tab="register" role="tab" aria-selected="false" aria-controls="register-tab" tabindex="-1">Register</button>
             </div>
 
             <!-- Login Form -->
-            <div id="login-tab" class="tab-content active">
+            <div id="login-tab" class="tab-content active" role="tabpanel" aria-labelledby="tab-login">
                 <form id="login-form">
                     <div class="form-group">
                         <label for="login-username">Username</label>
@@ -130,7 +134,7 @@
                     </div>
                     <button type="submit" class="btn-primary">Connect</button>
                     <button type="button" id="login-watch" class="btn-secondary">Connect &amp; Watch</button>
-                    <div id="login-error" class="error-message"></div>
+                    <div id="login-error" class="error-message" role="alert"></div>
                 </form>
                 <div class="login-help">
                     <p><strong>First time?</strong> Use the Register tab. New accounts need an invite code or admin approval.</p>
@@ -138,7 +142,7 @@
             </div>
 
             <!-- Register Form -->
-            <div id="register-tab" class="tab-content">
+            <div id="register-tab" class="tab-content" role="tabpanel" aria-labelledby="tab-register">
                 <form id="register-form">
                     <div class="form-group">
                         <label for="register-username">Username</label>
@@ -153,7 +157,7 @@
                         <input type="text" id="register-invite" autocomplete="off" maxlength="128">
                     </div>
                     <button type="submit" class="btn-primary">Create Account</button>
-                    <div id="register-error" class="error-message"></div>
+                    <div id="register-error" class="error-message" role="alert"></div>
                 </form>
             </div>
         </div>
@@ -161,7 +165,7 @@
 
     <!-- Footer -->
     <footer class="footer">
-        <span>Web-Pennmush v3.3.1 by Jordan Koch</span>
+        <span>Web-Pennmush v3.6.1 by Jordan Koch</span>
         <span>|</span>
         <span>Inspired by PennMUSH</span>
         <span>|</span>

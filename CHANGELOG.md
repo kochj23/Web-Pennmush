@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.6.1] - 2026-11-19
+
+### Frontend accessibility
+
+#### Added
+- Command input label (visually hidden) and `aria-describedby` key help; skip link to the command input
+- Game output is `role="log"` with `aria-live="polite"`, labelled and keyboard-scrollable; connection status is a polite live region; login/registration errors are `role="alert"`
+- Login modal is a labelled `role="dialog"` (`aria-modal`), focus moves into it when shown; Login/Register are ARIA tabs with `aria-selected`, roving tabindex and Left/Right/Home/End keys
+- Visible `:focus-visible` outline on every interactive element; `prefers-reduced-motion: reduce` disables transitions and animations
+
+#### Changed
+- Exits in the room panel are `<button>`s instead of clickable `div`s; room-map nodes are focusable (`role="button"`) and activate with Enter/Space; all non-submit buttons have `type="button"`
+- Footer version string updated (it still said 3.3.1)
+- README "Rate limits" section now says which limits survive a restart (missed in 3.6.0)
+
+#### Tests
+- `tests/test_frontend_a11y.py`: parses the served `/` page and static CSS/JS for the label, live region, alert/status roles, field labels, button types, dialog and tab semantics, skip link, focus styles, reduced motion and keyboard handlers (no JS test runner added)
+
 ## [3.6.0] - 2026-11-19
 
 ### Persistent login and registration limits
