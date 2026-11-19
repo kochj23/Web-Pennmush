@@ -5,7 +5,7 @@ A web-based MUSH server inspired by [PennMUSH](https://github.com/pennmush/pennm
 ![Build](https://github.com/kochj23/Web-Pennmush/actions/workflows/build.yml/badge.svg)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.12-blue)
-![Version](https://img.shields.io/badge/version-3.5.0-brightgreen)
+![Version](https://img.shields.io/badge/version-3.5.1-brightgreen)
 ![Tests](https://img.shields.io/badge/tests-554%20passed-brightgreen)
 
 It runs as the `mush` service of the Nova Games platform on nova-core3 and is served at **https://192.168.1.5:8443/mush/** (LAN only).
@@ -16,13 +16,17 @@ NPCs and the in-game guide are voiced by an AI narrator through the Nova Games r
 
 | | |
 |---|---|
-| Version | 3.5.0 (2026-11-19). See [CHANGELOG.md](CHANGELOG.md) |
+| Version | 3.5.1 (2026-11-19). See [CHANGELOG.md](CHANGELOG.md) |
 | Stack | Python 3.12, FastAPI, SQLAlchemy async (asyncpg / aiosqlite), uvicorn, plain JavaScript |
 | Where | nova-core3 container `novagames-mush`, behind Caddy at `/mush/`, deployed with `deploy/deploy.sh mush` from the NovaGames repo |
 | Data | Postgres 17 Games DB, schema `mush` (TLS verify-full, DML-only runtime role). Play history in the platform `play` schema |
 | AI | Relay only (`mush.npc` template). Staff and per-player on/off, real relay health, bounded retries, output validation, scripted fallback. See [AI options](#ai-options) |
 | Watch | `+watch` or the **Watch** button: NPCs wander, emote and talk to each other while you watch read-only. See [Spectator mode](#spectator-mode-watch) |
-| Tests | 583 passed (`python -m pytest -q`). CI on every push |
+| Tests | 588 passed (`python -m pytest -q`). CI on every push |
+
+### New in 3.5.1
+
+- Security events go through the `logging` module (`webpennmush.security`, `webpennmush.audit`) as structured records instead of `print`, with passwords and tokens redacted. See [Security model](#security-model).
 
 ### New in 3.5.0
 
@@ -598,6 +602,7 @@ The order of checks is: Origin, handshake rate, socket caps, accept, `auth_requi
 - **Secrets never live in git or in files in this repo.** `SECRET_KEY`, `RELAY_SECRET_MUSH` and the Postgres passwords (inside `DATABASE_URL` and `DATABASE_MIGRATE_URL`) are generated on nova-core3 by the NovaGames deploy (`openssl rand -hex 32` for app secrets, `openssl rand -hex 24` for DB roles). They live in `/srv/games/secrets/mush.env` (directory root 0700, file 0600), reach the container through compose `env_file`, and are never printed or copied back to the Mac. `deploy/secrets.list` in the NovaGames repo names the generated variables, and deploy keeps `RELAY_SECRET_MUSH` equal in `mush.env` and `relay.env`.
 - **On the Mac,** anything long-lived (for example a dev `SECRET_KEY`) lives in the macOS Keychain and is read into the environment at launch. `.env` is gitignored, and the NovaGames rsync excludes `*.env`, `*.db`, `.git` and virtualenvs, so nothing local is shipped to core3.
 - **The God password** is random on first start and written only to a 0600 file on the data volume. It is never logged.
+- **Security logging.** No `print`: failed logins, rate limits and suspicious input are structured events on the `webpennmush.security` logger, admin actions on `webpennmush.audit`. Each record carries the fields in `record.security_event`. Fields named like a password, token, secret, cookie or authorization are replaced with `[REDACTED]`; free text is scrubbed of `password=...`, `Bearer ...`, the password in `connect <name> <password>` and session tokens, with control characters removed so a value cannot forge a log line. `tests/test_security.py` checks no password or token reaches the log.
 - **Relay requests are HMAC-signed** with a 60 s replay window and constant-time comparison. They can only reach the container from `games_internal`.
 - **AI is relay-only.** The game contains no model client, model URL or API key, and has no egress. Vars sent to the relay are clipped to the contract caps with control characters removed; the relay fences them as untrusted. Model output is validated (`validate_output`) before it is shown or stored, and the staff AI switch is admin-only, same-origin and audit-logged.
 - **XSS.** Usernames are validated at REST registration as well as WebSocket login (stored-XSS fix, 2206d87). Descriptions are checked for script and event-handler patterns. The frontend renders all user-controlled text with `textContent`.
@@ -873,7 +878,7 @@ Web-Pennmush/
     config.py            Settings (environment / optional dev .env)
     auth.py              HMAC session tokens, login, client IP, admin and pending checks
     passwords.py         bcrypt wrapper (72-byte limit, dummy verify)
-    security.py          RateLimiter, InputValidator, SecurityLogger
+    security.py          RateLimiter, InputValidator, SecurityLogger (structured, redacted security events)
     database.py          Engine (Postgres TLS / SQLite), retry, Alembic upgrade/stamp, seed, sequence sync
     migrations/          Alembic env and revisions (0001_baseline = the 3.3.1 schema)
     models.py            SQLAlchemy models (objects, attributes, locks, mail, channels, ...)

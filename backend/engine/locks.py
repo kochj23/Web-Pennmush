@@ -9,7 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.models import Lock, DBObject
 from backend.engine.objects import ObjectManager
 from typing import Optional
+import logging
 import re
+
+log = logging.getLogger("webpennmush.locks")
 
 
 class LockEvaluator:
@@ -64,7 +67,7 @@ class LockEvaluator:
         try:
             return await self._eval_expression(lock_key, player, target)
         except Exception as e:
-            print(f"Lock evaluation error: {e}")
+            log.warning("lock evaluation error: %s", type(e).__name__)
             return False  # Fail secure
 
     async def _eval_expression(

@@ -5,9 +5,9 @@ Author: Jordan Koch (GitHub: kochj23)
 Security utilities including rate limiting, input validation, and protection.
 """
 from typing import Optional, Dict
-from datetime import datetime, timedelta
 from collections import OrderedDict, deque
 import html
+import logging
 import re
 import time
 
@@ -230,38 +230,75 @@ class InputValidator:
         return prompt
 
 
+_SECRET_FIELD = re.compile(r"(?i)pass(word|wd)?|pwd|token|secret|authorization|cookie|api[_-]?key")
+# Inline secrets inside free text: "password=...", "Bearer ...", "connect <name> <password>",
+# and our own session tokens (base64url payload "." base64url HMAC).
+_SECRET_TEXT = [
+    (re.compile(r"(?i)\b(pass(word|wd)?|pwd|token|secret|api[_-]?key)\b(\s*[=:]\s*|\s+)\S+"), r"\1=[REDACTED]"),
+    (re.compile(r"(?i)\bbearer\s+\S+"), "Bearer [REDACTED]"),
+    (re.compile(r"(?i)^(\s*connect\s+\S+\s+)\S+"), r"\1[REDACTED]"),
+    (re.compile(r"[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{20,}"), "[REDACTED]"),
+]
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def redact(value, limit: int = 100) -> str:
+    """Make a value safe for a log line: no secrets, no control chars (log injection), bounded."""
+    text = str(value)[:max(limit * 4, 400)]
+    for pattern, repl in _SECRET_TEXT:
+        text = pattern.sub(repl, text)
+    text = _CONTROL.sub("?", text)
+    return text[:limit]
+
+
 class SecurityLogger:
     """
-    Logs security-relevant events.
-    In production, send to proper logging system (ELK, Splunk, etc.)
+    Structured security events on the `webpennmush.security` logger (admin
+    actions on `webpennmush.audit`). Each record has a readable message
+    `security event=<name> k=v ...` and the same fields as a dict in
+    `record.security_event`, for a JSON formatter or log shipper.
+
+    Passwords and tokens are never logged: fields with secret-looking names
+    are dropped to [REDACTED], and free text goes through redact().
     """
 
-    @staticmethod
-    def log_failed_login(username: str, ip: str):
-        """Log failed login attempt"""
-        print(f"[SECURITY] Failed login: username={username}, ip={ip}, time={datetime.utcnow()}")
+    log = logging.getLogger("webpennmush.security")
+    audit = logging.getLogger("webpennmush.audit")
 
-    @staticmethod
-    def log_rate_limit_exceeded(key: str, limit_type: str):
-        """Log rate limit violation"""
-        print(f"[SECURITY] Rate limit exceeded: key={key}, type={limit_type}, time={datetime.utcnow()}")
+    @classmethod
+    def event(cls, name: str, level: int = logging.WARNING, logger: Optional[logging.Logger] = None, **fields):
+        clean = {"event": name}
+        for k, v in fields.items():
+            if v is None:
+                continue
+            clean[k] = "[REDACTED]" if _SECRET_FIELD.search(k) else (v if isinstance(v, (int, bool)) else redact(v))
+        line = " ".join(f"{k}={v!r}" if isinstance(v, str) else f"{k}={v}" for k, v in clean.items())
+        (logger or cls.log).log(level, "security %s", line, extra={"security_event": clean})
+        return clean
 
-    @staticmethod
-    def log_suspicious_input(input_type: str, content: str, player_id: Optional[int] = None):
-        """Log suspicious input detected"""
-        print(f"[SECURITY] Suspicious input: type={input_type}, player={player_id}, content={content[:100]}, time={datetime.utcnow()}")
+    @classmethod
+    def log_failed_login(cls, username: Optional[str], ip: str, player_id: Optional[int] = None,
+                         reason: Optional[str] = None):
+        """Failed login. Callers pass the player id when known; the password is never a parameter."""
+        cls.event("failed_login", logging.INFO, username=username, ip=ip, player=player_id, reason=reason)
 
-    @staticmethod
-    def log_command_execution(player_id: int, command: str):
-        """Log command execution (verbose, for debugging)"""
-        # Only log in debug mode to avoid spam
-        # print(f"[DEBUG] Command: player={player_id}, command={command[:50]}, time={datetime.utcnow()}")
-        pass
+    @classmethod
+    def log_rate_limit_exceeded(cls, key: str, limit_type: str):
+        cls.event("rate_limited", key=key, limit=limit_type)
 
-    @staticmethod
-    def log_admin_action(player_id: int, action: str):
-        """Log admin command execution"""
-        print(f"[AUDIT] Admin action: player={player_id}, action={action}, time={datetime.utcnow()}")
+    @classmethod
+    def log_suspicious_input(cls, input_type: str, content: str, player_id: Optional[int] = None):
+        cls.event("suspicious_input", input_type=input_type, player=player_id, content=content)
+
+    @classmethod
+    def log_command_execution(cls, player_id: int, command: str):
+        """Per-command trace, DEBUG only (spam otherwise)."""
+        if cls.log.isEnabledFor(logging.DEBUG):
+            cls.event("command", logging.DEBUG, player=player_id, command=redact(command, 50))
+
+    @classmethod
+    def log_admin_action(cls, player_id: int, action: str):
+        cls.event("admin_action", logging.INFO, cls.audit, player=player_id, action=action)
 
 
 # Global instances

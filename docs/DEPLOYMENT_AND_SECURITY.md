@@ -59,6 +59,7 @@ The Web-Pennmush server runs as a container named `novagames-mush` behind a Cadd
 
 ## Security Controls
 
+- Security events are logged with the `logging` module, never `print`: `webpennmush.security` (`failed_login`, `rate_limited`, `suspicious_input`) and `webpennmush.audit` (`admin_action`). Each record has a `security <k=v ...>` message and a `security_event` dict for structured shipping. Passwords and tokens are redacted before logging.
 - `/docs`, `/redoc`, and `/openapi.json` are disabled; `DEBUG` is off.
 - All `/api` routes require a session except:
   - `/api/auth/login`

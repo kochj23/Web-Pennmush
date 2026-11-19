@@ -26,7 +26,7 @@ from backend.config import settings
 from backend.database import get_db
 from backend.models import DBObject, ObjectType
 from backend.passwords import pwd_context
-from backend.security import rate_limiter, input_validator
+from backend.security import rate_limiter, input_validator, security_logger
 
 log = logging.getLogger("webpennmush.auth")
 
@@ -151,10 +151,10 @@ async def authenticate(db: AsyncSession, username: str, password: str, ip: str) 
     player = await ObjectManager(db).get_player_by_exact_name(username)
     if not player or not player.password_hash:
         await _dummy_verify()
-        log.info("failed login (unknown user) from %s", ip)
+        security_logger.log_failed_login(None, ip, reason="unknown_user")
         return LoginResult(False, error="Invalid username or password", status=401)
     if not await pwd_context.averify(password, player.password_hash):
-        log.info("failed login for #%s from %s", player.id, ip)
+        security_logger.log_failed_login(None, ip, player_id=player.id, reason="bad_password")
         return LoginResult(False, error="Invalid username or password", status=401)
     if is_pending(player):
         return LoginResult(False, error="Your account is awaiting admin approval.", status=403)

@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.5.1] - 2026-11-19
+
+### Logging
+
+#### Changed
+- `SecurityLogger` writes structured events through `logging` instead of `print`: `webpennmush.security` (`failed_login`, `rate_limited`, `suspicious_input`, DEBUG `command`) and `webpennmush.audit` (`admin_action`). Records carry the fields in `record.security_event`
+- Secret-named fields (password, token, secret, cookie, authorization, api key) are logged as `[REDACTED]`; free text is scrubbed of inline passwords, bearer and session tokens, and control characters (no forged log lines)
+- Failed logins from `auth.authenticate` are `failed_login` events (player id and reason, never the password); lock evaluation errors log the exception class on `webpennmush.locks`
+- No `print` calls remain in the served backend
+
+#### Tests
+- `tests/test_security.py`: SecurityLogger tests use `caplog` and check the structured fields; new tests prove passwords and session tokens never reach the log (direct events, free text, real failed logins) and that newlines cannot forge a record
+
 ## [3.5.0] - 2026-11-19
 
 ### Seeded world randomness

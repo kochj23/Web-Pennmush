@@ -5,6 +5,8 @@ Author: Jordan Koch (GitHub: kochj23)
 Thoroughly tests input validation, XSS prevention, SQL injection
 detection, rate limiting, and AI prompt sanitization.
 """
+import logging
+
 import pytest
 import re
 from datetime import datetime, timedelta
@@ -284,27 +286,93 @@ class TestSanitizeAIPrompt:
 
 
 # ---------------------------------------------------------------------------
-# SecurityLogger -- smoke tests (output goes to stdout)
+# SecurityLogger -- structured events on the logging module, never secrets
 # ---------------------------------------------------------------------------
 
+def _events(caplog):
+    return [r for r in caplog.records if hasattr(r, "security_event")]
+
+
 class TestSecurityLogger:
-    def test_log_failed_login(self, capsys):
+    def test_log_failed_login(self, caplog):
+        with caplog.at_level(logging.INFO, logger="webpennmush.security"):
+            SecurityLogger.log_failed_login("baduser", "1.2.3.4")
+        (rec,) = _events(caplog)
+        assert rec.name == "webpennmush.security"
+        assert rec.security_event == {"event": "failed_login", "username": "baduser", "ip": "1.2.3.4"}
+        assert "event='failed_login'" in rec.getMessage()
+
+    def test_log_rate_limit(self, caplog):
+        with caplog.at_level(logging.INFO, logger="webpennmush.security"):
+            SecurityLogger.log_rate_limit_exceeded("spammer", "command")
+        (rec,) = _events(caplog)
+        assert rec.levelno == logging.WARNING
+        assert rec.security_event["event"] == "rate_limited" and rec.security_event["limit"] == "command"
+
+    def test_log_suspicious_input(self, caplog):
+        with caplog.at_level(logging.INFO, logger="webpennmush.security"):
+            SecurityLogger.log_suspicious_input("name", "<script>", player_id=42)
+        (rec,) = _events(caplog)
+        assert rec.security_event == {"event": "suspicious_input", "input_type": "name", "player": 42,
+                                      "content": "<script>"}
+
+    def test_log_admin_action(self, caplog):
+        with caplog.at_level(logging.INFO, logger="webpennmush.audit"):
+            SecurityLogger.log_admin_action(1, "@ban user")
+        (rec,) = _events(caplog)
+        assert rec.name == "webpennmush.audit" and rec.security_event["action"] == "@ban user"
+
+    def test_no_print_to_stdout(self, capsys):
         SecurityLogger.log_failed_login("baduser", "1.2.3.4")
-        captured = capsys.readouterr()
-        assert "[SECURITY]" in captured.out
-        assert "baduser" in captured.out
+        SecurityLogger.log_admin_action(1, "x")
+        assert capsys.readouterr().out == ""
 
-    def test_log_rate_limit(self, capsys):
-        SecurityLogger.log_rate_limit_exceeded("spammer", "command")
-        captured = capsys.readouterr()
-        assert "Rate limit" in captured.out
 
-    def test_log_suspicious_input(self, capsys):
-        SecurityLogger.log_suspicious_input("name", "<script>", player_id=42)
-        captured = capsys.readouterr()
-        assert "Suspicious" in captured.out
+class TestNoSecretsInLogs:
+    PASSWORD = "hunter2-Correct-Horse"
 
-    def test_log_admin_action(self, capsys):
-        SecurityLogger.log_admin_action(1, "@ban user")
-        captured = capsys.readouterr()
-        assert "[AUDIT]" in captured.out
+    def _all_text(self, caplog):
+        return caplog.text + repr([getattr(r, "security_event", None) for r in caplog.records])
+
+    def test_secret_named_fields_are_redacted(self, caplog):
+        with caplog.at_level(logging.DEBUG):
+            ev = SecurityLogger.event("x", password=self.PASSWORD, token="abc.def", authorization="Bearer zzz")
+        assert ev["password"] == ev["token"] == ev["authorization"] == "[REDACTED]"
+        assert self.PASSWORD not in self._all_text(caplog) and "zzz" not in self._all_text(caplog)
+
+    def test_secrets_inside_free_text_are_redacted(self, caplog):
+        from backend.auth import issue_token
+        token = issue_token(1)
+        samples = [
+            f"connect One {self.PASSWORD}",
+            f"password={self.PASSWORD}",
+            f"@password old={self.PASSWORD}",
+            f"Authorization: Bearer {token}",
+            f"token {token}",
+            f"cookie value {token}",
+        ]
+        with caplog.at_level(logging.DEBUG):
+            for text in samples:
+                SecurityLogger.log_suspicious_input("ws", text, player_id=1)
+                SecurityLogger.log_admin_action(1, text)
+                SecurityLogger.log_command_execution(1, text)
+        assert caplog.records
+        blob = self._all_text(caplog)
+        assert self.PASSWORD not in blob
+        assert token not in blob and token.split(".")[1] not in blob
+
+    def test_control_characters_cannot_forge_log_lines(self, caplog):
+        with caplog.at_level(logging.INFO):
+            SecurityLogger.log_suspicious_input("ws", "ok\nsecurity event='admin_action' player=1")
+        assert "\n" not in caplog.records[-1].getMessage()
+
+    async def test_failed_logins_never_log_the_password(self, seeded_session, caplog):
+        from backend.auth import authenticate
+        with caplog.at_level(logging.DEBUG):
+            r1 = await authenticate(seeded_session, "TestPlayer", self.PASSWORD, "10.0.0.9")
+            r2 = await authenticate(seeded_session, "Nobody", self.PASSWORD, "10.0.0.9")
+        assert not r1.ok and not r2.ok
+        events = [r.security_event for r in _events(caplog)]
+        assert {"event": "failed_login", "ip": "10.0.0.9", "player": 10, "reason": "bad_password"} in events
+        assert {"event": "failed_login", "ip": "10.0.0.9", "reason": "unknown_user"} in events
+        assert self.PASSWORD not in self._all_text(caplog)
