@@ -393,3 +393,11 @@ class Page(Base):
 
     def __repr__(self):
         return f"<Page(id={self.id}, from={self.from_player_id}, to={self.to_player_id})>"
+
+
+class WorldSetting(Base):
+    """Small world-level key/value settings (e.g. rng_seed, rng_epoch)."""
+    __tablename__ = "world_settings"
+
+    key = Column(String(64), primary_key=True)
+    value = Column(Text, nullable=False)

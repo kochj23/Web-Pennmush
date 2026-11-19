@@ -199,7 +199,7 @@ think [mod(17, 5)]
 ```
 
 #### rand(max, min)
-Generates random number.
+Generates random number. All random functions (`rand`, `dice`, `die`, `shuffle`, `choose`, `pick`, `coin`, `d20`, `roll_stats`, `skill_check`, `initiative`, `attack_roll`) draw from the world's seeded stream: unpredictable to players, but each top-level evaluation can be replayed by staff from the `softcode rng epoch=E n=N` log line.
 ```
 think [rand(100)]
 # Output: Random number 0-100

@@ -14,7 +14,7 @@ from pathlib import Path
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.pool import NullPool, StaticPool
-from backend.models import Base, DBObject, ObjectType, Attribute, Channel, ChannelMembership, HelpTopic
+from backend.models import Base, DBObject, ObjectType, Attribute, Channel, ChannelMembership, HelpTopic, WorldSetting
 from backend.config import settings
 from backend.passwords import pwd_context
 from datetime import datetime
@@ -203,15 +203,14 @@ def _migrate_sync(conn, cfg) -> str:
     if "alembic_version" not in tables and "objects" in tables:
         # Created by the old create_all startup: record it as the baseline
         # without touching a single table.
-        from alembic.autogenerate import compare_metadata
-        from alembic.migration import MigrationContext
-        drift = compare_metadata(MigrationContext.configure(conn), Base.metadata)
-        if drift:
-            log.warning("existing schema differs from baseline in %d place(s); stamping anyway: %s",
-                        len(drift), drift[:5])
         command.stamp(cfg, BASELINE_REVISION)
         action = "stamped"
     command.upgrade(cfg, "head")
+    from alembic.autogenerate import compare_metadata
+    from alembic.migration import MigrationContext
+    drift = compare_metadata(MigrationContext.configure(conn), Base.metadata)
+    if drift:
+        log.warning("schema differs from the models in %d place(s) after upgrade: %s", len(drift), drift[:5])
     return action
 
 
@@ -659,6 +658,27 @@ Related: help @create, help talk
                               "set GOD_PASSWORD and reset #1 with @password.")
 
     await sync_sequences(ddl_engine)
+    await load_world_rng(SeedSession)
+
+
+async def load_world_rng(session_factory, world=None):
+    """Create the world RNG seed once, bump the epoch every start, and configure world_rng."""
+    from backend.engine.world_rng import world_rng
+    world = world or world_rng
+    async with session_factory() as session:
+        seed_row = await session.get(WorldSetting, "rng_seed")
+        if seed_row is None:
+            seed_row = WorldSetting(key="rng_seed", value=str(secrets.randbits(63)))
+            session.add(seed_row)
+        epoch_row = await session.get(WorldSetting, "rng_epoch")
+        if epoch_row is None:
+            epoch_row = WorldSetting(key="rng_epoch", value="0")
+            session.add(epoch_row)
+        epoch_row.value = str(int(epoch_row.value) + 1)
+        await session.commit()
+        world.configure(int(seed_row.value), int(epoch_row.value))
+    log.info("world rng epoch %d", world.epoch)  # never log the seed
+    return world
 
 
 async def close_db():

@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.5.0] - 2026-11-19
+
+### Seeded world randomness
+
+#### Added
+- `backend/engine/world_rng.py`: `WorldRandom`, one seeded RNG per world. Seed created once with `secrets` and stored in the new `world_settings` table (revision `0002_world_settings`); `rng_epoch` is bumped on every start so restarts never repeat values
+- `SoftcodeInterpreter.eval(..., rng_ref=(epoch, n))` replays one top-level evaluation; evaluations that used randomness log `softcode rng epoch=E n=N executor=#X` (the seed is never logged)
+
+#### Changed
+- Every softcode random function (`rand`, `dice`, `die`, `shuffle`, `choose`/`pick`, `coin`, `d20`, `roll_stats`, `skill_check`, `initiative`, `attack_roll`) uses the evaluation's stream; nested calls (`ulocal`, ...) share it
+- Scripted NPC lines (`AIManager`) and the +watch `SceneDirector` default to the world `npc` stream; both accept an injected `random.Random`
+- After `upgrade head`, startup warns if the schema differs from the models
+
+#### Tests
+- `tests/test_world_rng.py`: same seed/epoch gives identical output, different seed or epoch differs, replay from `rng_ref`, nested evaluations share the stream, global `random.seed` does not leak in, log line has the ref but not the seed, NPC lines follow the seed, seed persists while the epoch bumps
+- `tests/test_migrations.py`: an "existing" database is the 3.3.1 table set, checked against revision 0001
+
 ## [3.4.0] - 2026-11-19
 
 ### Schema migrations (Alembic)

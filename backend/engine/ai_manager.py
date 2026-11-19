@@ -12,13 +12,13 @@ relay not configured or not polling, queue full, timeout, rejected or
 nonsensical output - degrades to a scripted line, so play never blocks.
 """
 import asyncio
-import random
 import re
 import time
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from backend.engine.world_rng import world_rng
 from backend.relay import RelayJobQueue
 
 
@@ -142,8 +142,9 @@ def scripted_guide(query: str) -> str:
 class AIManager:
     """Builds bounded relay jobs for NPC lines, validates results and supplies scripted fallbacks."""
 
-    def __init__(self, queue: Optional[RelayJobQueue] = None, clock=time.monotonic):
+    def __init__(self, queue: Optional[RelayJobQueue] = None, clock=time.monotonic, rng=None):
         from backend.config import settings
+        self.rng = rng or world_rng.npc  # seeded world stream; tests inject their own
         self.settings = settings
         self.queue = queue or RelayJobQueue(max_pending=settings.AI_MAX_PENDING)
         self.backend = AIBackend.RELAY if settings.AI_BACKEND == "relay" else AIBackend.NONE
@@ -298,7 +299,7 @@ class AIManager:
 
     def _generate_placeholder(self, prompt: str, personality: str) -> str:
         """Scripted line used whenever the relay can't answer."""
-        return random.choice(_SCRIPTED_LINES)
+        return self.rng.choice(_SCRIPTED_LINES)
 
     async def get_game_guidance(self, player_query: str, game_context: Dict[str, Any], player_id: int = 0) -> AIReply:
         """The in-game guide speaks through the same NPC template; scripted keyword answers otherwise."""

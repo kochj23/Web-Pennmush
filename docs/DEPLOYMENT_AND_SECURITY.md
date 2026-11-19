@@ -153,6 +153,21 @@ Review the generated file (`render_as_batch` is on for SQLite), give it a
 readable `--rev-id`, and add a test in `tests/test_migrations.py`. Never edit a
 revision that has shipped.
 
+## World randomness and replaying a bug report
+
+Softcode random functions and scripted NPC lines use one seeded world RNG
+(`backend/engine/world_rng.py`), not the global `random`. The seed is created
+once in `world_settings.rng_seed` (never logged); `world_settings.rng_epoch`
+goes up by one on every start. Each top-level softcode evaluation gets its own
+stream from (seed, epoch, n), and every evaluation that used randomness logs
+`softcode rng epoch=E n=N executor=#X` (logger `webpennmush.softcode.rng`).
+
+To replay a reported roll, take E and N from the log and, against a copy of
+the database (never production), run
+`await SoftcodeInterpreter(session).eval(code, executor_id=X, rng_ref=(E, N))`
+after `load_world_rng`, or with `WorldRandom(seed=<rng_seed>, epoch=E)`.
+Treat `rng_seed` like a secret: anyone holding it can predict rolls.
+
 ## Admin Tasks
 
 - Approve accounts:

@@ -5,11 +5,12 @@ Author: Jordan Koch (GitHub: kochj23)
 Implements a MUSHcode interpreter for user-created content.
 Supports common MUSH functions and attribute evaluation.
 """
-from typing import Dict, Callable, Any, Optional
+from typing import Dict, Callable, Any, Optional, Tuple
+from contextvars import ContextVar
+import logging
 from backend.engine.objects import ObjectManager
 from sqlalchemy.ext.asyncio import AsyncSession
 import re
-import random
 import time
 import math
 import json
@@ -20,8 +21,22 @@ from backend.engine.softcode_budget import (
     EvalBudget, SoftcodeBudgetExceeded, current_budget, activate_budget, deactivate_budget,
     check_size_args,
 )
+from backend.engine.world_rng import WorldRandom, world_rng
 from sqlalchemy import select
 import regex as _regex
+
+rng_log = logging.getLogger("webpennmush.softcode.rng")
+
+
+class _RngState:
+    """The random stream of one top-level evaluation, shared by every nested call."""
+    __slots__ = ("rng", "ref", "used")
+
+    def __init__(self, rng, ref):
+        self.rng, self.ref, self.used = rng, ref, False
+
+
+_eval_rng: ContextVar[Optional[_RngState]] = ContextVar("softcode_rng", default=None)
 
 # User-supplied patterns run with a hard timeout (ReDoS guard) and length caps.
 _RE_TIMEOUT_S = 0.05
@@ -54,8 +69,9 @@ class SoftcodeInterpreter:
     - get(obj/attr)    - Get attribute from object
     """
 
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: AsyncSession, world: Optional[WorldRandom] = None):
         self.session = session
+        self.world = world or world_rng
         self.obj_mgr = ObjectManager(session)
         self.functions: Dict[str, Callable] = {}
         self._register_functions()
@@ -323,6 +339,14 @@ class SoftcodeInterpreter:
             if hasattr(self, f"func_ext_{i}"):
                 self.register_function(f"ext_{i}", getattr(self, f"func_ext_{i}"))
 
+    def _rng(self):
+        """Random stream of the current evaluation (seeded per world, see world_rng.py)."""
+        state = _eval_rng.get()
+        if state is None:  # function called directly, outside eval()
+            return self.world.next_eval()[1]
+        state.used = True
+        return state.rng
+
     def register_function(self, name: str, handler: Callable):
         """Register a softcode function"""
         self.functions[name.lower()] = handler
@@ -331,7 +355,8 @@ class SoftcodeInterpreter:
         self,
         code: str,
         context: Optional[Dict[str, Any]] = None,
-        executor_id: Optional[int] = None
+        executor_id: Optional[int] = None,
+        rng_ref: Optional[Tuple[int, int]] = None,
     ) -> str:
         """
         Evaluate MUSHcode and return the result.
@@ -340,6 +365,8 @@ class SoftcodeInterpreter:
             code: The MUSHcode string to evaluate
             context: Context dictionary with variables (%0-%9, etc.)
             executor_id: Object ID of the executor (for v() lookups)
+            rng_ref: (epoch, n) from a `softcode rng` log line, to replay that
+                evaluation's random values exactly. Default: the next stream.
 
         Returns:
             The evaluated result as a string
@@ -352,12 +379,22 @@ class SoftcodeInterpreter:
             # Top-level evaluation: install a fresh global budget for this command.
             budget = EvalBudget.from_settings()
             token = activate_budget(budget)
+            if rng_ref is None:
+                rng_ref, rng = self.world.next_eval()
+            else:
+                rng = self.world.stream(*rng_ref)
+            rng_state = _RngState(rng, tuple(rng_ref))
+            rng_token = _eval_rng.set(rng_state)
             try:
                 result = await self._eval_inner(code, context, executor_id, budget)
             except SoftcodeBudgetExceeded as exc:
                 return f"#-1 {exc.reason}"
             finally:
                 deactivate_budget(token)
+                _eval_rng.reset(rng_token)
+                if rng_state.used:
+                    rng_log.info("softcode rng epoch=%d n=%d executor=#%s", rng_state.ref[0], rng_state.ref[1],
+                                 executor_id)
             if budget.exceeded:
                 return f"#-1 {budget.exceeded}"
             return result
@@ -543,11 +580,11 @@ class SoftcodeInterpreter:
     async def func_rand(self, args: list, context: Dict, executor_id: Optional[int]) -> int:
         """Generate random number"""
         if not args:
-            return random.randint(0, 100)
+            return self._rng().randint(0, 100)
         try:
             max_val = int(args[0])
             min_val = int(args[1]) if len(args) > 1 else 0
-            return random.randint(min_val, max_val)
+            return self._rng().randint(min_val, max_val)
         except ValueError:
             return 0
 
@@ -1169,7 +1206,7 @@ class SoftcodeInterpreter:
         delimiter = args[1] if len(args) > 1 else " "
 
         elements = list_str.split(delimiter)
-        random.shuffle(elements)
+        self._rng().shuffle(elements)
 
         return delimiter.join(elements)
 
@@ -2045,7 +2082,7 @@ class SoftcodeInterpreter:
                 # Limit to prevent abuse
                 num_dice = min(num_dice, 100)
 
-                rolls = [random.randint(1, num_sides) for _ in range(num_dice)]
+                rolls = [self._rng().randint(1, num_sides) for _ in range(num_dice)]
                 return " ".join(str(r) for r in rolls)
         except:
             pass
@@ -2066,7 +2103,7 @@ class SoftcodeInterpreter:
 
                 num_dice = min(num_dice, 100)
 
-                total = sum(random.randint(1, num_sides) for _ in range(num_dice))
+                total = sum(self._rng().randint(1, num_sides) for _ in range(num_dice))
                 return total
         except:
             pass
@@ -2153,7 +2190,7 @@ class SoftcodeInterpreter:
             return ""
         delimiter = args[1] if len(args) > 1 else " "
         elements = args[0].split(delimiter)
-        return random.choice(elements) if elements else ""
+        return self._rng().choice(elements) if elements else ""
 
     async def func_cat(self, args: list, context: Dict, executor_id: Optional[int]) -> str:
         """Concat with spaces"""
@@ -2686,11 +2723,11 @@ class SoftcodeInterpreter:
 
     async def func_d20(self, args: list, context: Dict, executor_id: Optional[int]) -> int:
         """Roll d20"""
-        return random.randint(1, 20)
+        return self._rng().randint(1, 20)
 
     async def func_coin(self, args: list, context: Dict, executor_id: Optional[int]) -> str:
         """Flip coin"""
-        return random.choice(["heads", "tails"])
+        return self._rng().choice(["heads", "tails"])
 
     # FLOW CONTROL (15)
     async def func_case(self, args: list, context: Dict, executor_id: Optional[int]) -> str:
@@ -3180,7 +3217,7 @@ class SoftcodeInterpreter:
         """Roll character stats"""
         stats = []
         for _ in range(6):  # 6 stats
-            rolls = [random.randint(1, 6) for _ in range(4)]
+            rolls = [self._rng().randint(1, 6) for _ in range(4)]
             rolls.sort(reverse=True)
             stats.append(str(sum(rolls[:3])))  # Sum top 3
         return " ".join(stats)
@@ -3188,10 +3225,10 @@ class SoftcodeInterpreter:
     async def func_skill_check(self, args: list, context: Dict, executor_id: Optional[int]) -> int:
         """Skill check"""
         if not args:
-            return random.randint(1, 20)
+            return self._rng().randint(1, 20)
         try:
             dc = int(args[0])
-            roll = random.randint(1, 20)
+            roll = self._rng().randint(1, 20)
             modifier = int(args[1]) if len(args) > 1 else 0
             return 1 if roll + modifier >= dc else 0
         except:
@@ -3204,11 +3241,11 @@ class SoftcodeInterpreter:
     async def func_initiative(self, args: list, context: Dict, executor_id: Optional[int]) -> int:
         """Roll initiative"""
         modifier = int(args[0]) if args else 0
-        return random.randint(1, 20) + modifier
+        return self._rng().randint(1, 20) + modifier
 
     async def func_attack_roll(self, args: list, context: Dict, executor_id: Optional[int]) -> int:
         """Attack roll"""
-        return random.randint(1, 20) + (int(args[0]) if args else 0)
+        return self._rng().randint(1, 20) + (int(args[0]) if args else 0)
 
     async def func_damage_roll(self, args: list, context: Dict, executor_id: Optional[int]) -> int:
         """Damage roll"""

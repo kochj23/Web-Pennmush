@@ -5,7 +5,7 @@ A web-based MUSH server inspired by [PennMUSH](https://github.com/pennmush/pennm
 ![Build](https://github.com/kochj23/Web-Pennmush/actions/workflows/build.yml/badge.svg)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.12-blue)
-![Version](https://img.shields.io/badge/version-3.4.0-brightgreen)
+![Version](https://img.shields.io/badge/version-3.5.0-brightgreen)
 ![Tests](https://img.shields.io/badge/tests-554%20passed-brightgreen)
 
 It runs as the `mush` service of the Nova Games platform on nova-core3 and is served at **https://192.168.1.5:8443/mush/** (LAN only).
@@ -16,13 +16,17 @@ NPCs and the in-game guide are voiced by an AI narrator through the Nova Games r
 
 | | |
 |---|---|
-| Version | 3.4.0 (2026-11-19). See [CHANGELOG.md](CHANGELOG.md) |
+| Version | 3.5.0 (2026-11-19). See [CHANGELOG.md](CHANGELOG.md) |
 | Stack | Python 3.12, FastAPI, SQLAlchemy async (asyncpg / aiosqlite), uvicorn, plain JavaScript |
 | Where | nova-core3 container `novagames-mush`, behind Caddy at `/mush/`, deployed with `deploy/deploy.sh mush` from the NovaGames repo |
 | Data | Postgres 17 Games DB, schema `mush` (TLS verify-full, DML-only runtime role). Play history in the platform `play` schema |
 | AI | Relay only (`mush.npc` template). Staff and per-player on/off, real relay health, bounded retries, output validation, scripted fallback. See [AI options](#ai-options) |
 | Watch | `+watch` or the **Watch** button: NPCs wander, emote and talk to each other while you watch read-only. See [Spectator mode](#spectator-mode-watch) |
-| Tests | 571 passed (`python -m pytest -q`). CI on every push |
+| Tests | 583 passed (`python -m pytest -q`). CI on every push |
+
+### New in 3.5.0
+
+- Seeded world randomness: softcode `rand()`, `dice()`, `shuffle()`, `choose()` and friends, scripted NPC lines and the +watch scene draw from a world RNG seeded from the database (`world_settings`, revision `0002_world_settings`), not the global `random`. Players still get unpredictable rolls; staff can replay one evaluation from its logged `epoch`/`n`. See [World randomness](docs/DEPLOYMENT_AND_SECURITY.md#world-randomness-and-replaying-a-bug-report).
 
 ### New in 3.4.0
 
@@ -889,6 +893,7 @@ Web-Pennmush/
       mail.py, pages.py, quests.py, economy.py, moderation.py
       ai_manager.py      AI narrator: mush.npc jobs, toggles, health, retries, output validation, fallback
       spectate.py        +watch spectator mode: autonomous NPC scene director, caps, auto-stop
+      world_rng.py       Seeded world RNG (seed/epoch in world_settings), per-evaluation softcode streams
   frontend/
     index.html, admin.html
     css/style.css

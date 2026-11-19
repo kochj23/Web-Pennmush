@@ -26,6 +26,7 @@ from typing import Deque, Dict, Optional, Tuple
 
 from sqlalchemy import select
 
+from backend.engine.world_rng import world_rng
 from backend.models import NPC, DBObject, ObjectType
 from backend.play_log import WATCH_KEY, WATCH_PLAYER, play_log
 
@@ -65,7 +66,7 @@ class SceneDirector:
         self.home_room: Optional[int] = None
         self.task: Optional[asyncio.Task] = None
         self.history: Dict[int, Deque[dict]] = {}
-        self.rng = rng or random.Random()
+        self.rng = rng or world_rng.npc
 
     # ---------------- spectators ----------------
 

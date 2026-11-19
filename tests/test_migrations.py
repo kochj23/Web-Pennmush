@@ -15,17 +15,29 @@ from backend.models import Base
 from tests.pg_cluster import PgCluster
 
 
+# Tables the 3.3.1 create_all startup built (revision 0001_baseline). An
+# "existing" database in these tests is exactly that, nothing newer.
+BASELINE_TABLES = {
+    "objects", "attributes", "locks", "mail", "channels", "channel_memberships", "help_topics", "npcs",
+    "quests", "quest_steps", "quest_progress", "player_currency", "transactions", "ban_records", "pages",
+}
+
+
+def _create_all_331(conn):
+    Base.metadata.create_all(conn, tables=[t for t in Base.metadata.sorted_tables if t.name in BASELINE_TABLES])
+
+
 def _head():
     from alembic.script import ScriptDirectory
     return ScriptDirectory.from_config(alembic_config()).get_current_head()
 
 
 def _snapshot(conn):
-    """Everything about the schema except alembic's own table."""
+    """Everything about the 3.3.1 tables (later revisions may add tables)."""
     insp = inspect(conn)
     out = {}
     for t in sorted(insp.get_table_names()):
-        if t == "alembic_version":
+        if t not in BASELINE_TABLES:
             continue
         out[t] = (
             [(c["name"], str(c["type"]), c["nullable"]) for c in insp.get_columns(t)],
@@ -126,7 +138,7 @@ async def test_fresh_database_gets_seeded(ddl_engine):
 
 async def test_existing_create_all_database_is_stamped_not_altered(ddl_engine):
     async with ddl_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_create_all_331)
         await conn.execute(text(
             "INSERT INTO objects (id, name, type, flags, powers, created_at, modified_at) "
             "VALUES (42, 'Survivor', 'THING', '', '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"))
@@ -144,7 +156,7 @@ async def test_existing_create_all_database_is_stamped_not_altered(ddl_engine):
 
 async def test_stamped_database_then_upgrades_a_new_revision(ddl_engine, tmp_path):
     async with ddl_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_create_all_331)
     (tmp_path / "extra_versions").mkdir()
     extra = _sample_revision(tmp_path / "extra_versions", _head())
 
@@ -153,6 +165,12 @@ async def test_stamped_database_then_upgrades_a_new_revision(ddl_engine, tmp_pat
     cols = await _run(ddl_engine, lambda c: [col["name"] for col in inspect(c).get_columns("objects")])
     assert "sample_note" in cols
     assert await _version(ddl_engine) == "9999_sample"
+
+
+def test_baseline_tables_match_revision_0001():
+    src = (alembic_config().get_main_option("script_location") + "/versions/0001_baseline.py")
+    import re
+    assert set(re.findall(r"op\.create_table\('(\w+)'", open(src).read())) == BASELINE_TABLES
 
 
 def test_baseline_revision_is_the_root():
