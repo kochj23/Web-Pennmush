@@ -139,9 +139,9 @@ async def authenticate(db: AsyncSession, username: str, password: str, ip: str) 
     """Shared login check for REST and WebSocket. Never reveals which part was wrong."""
     if not username or not password or len(username) > 100 or len(password) > 1024:
         return LoginResult(False, error="Username and password required", status=400)
-    if not rate_limiter.is_allowed(ip, "login_ip"):
+    if not await rate_limiter.check(db, ip, "login_ip"):
         return LoginResult(False, error="Too many login attempts. Please wait a few minutes.", status=429)
-    if not rate_limiter.is_allowed(username.lower(), "login_user"):
+    if not await rate_limiter.check(db, username.lower(), "login_user"):
         return LoginResult(False, error="Too many login attempts. Please wait a few minutes.", status=429)
     ok, _ = input_validator.validate_name(username)
     if not ok:
@@ -162,7 +162,7 @@ async def authenticate(db: AsyncSession, username: str, password: str, ip: str) 
     banned, _ban = await ModerationManager(db).is_banned(player.id)
     if banned:
         return LoginResult(False, error="This account is banned.", status=403)
-    rate_limiter.reset(username.lower(), "login_user")
+    await rate_limiter.areset(db, username.lower(), "login_user")
     return LoginResult(True, player=player)
 
 

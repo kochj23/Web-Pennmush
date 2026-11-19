@@ -5,8 +5,8 @@ A web-based MUSH server inspired by [PennMUSH](https://github.com/pennmush/pennm
 ![Build](https://github.com/kochj23/Web-Pennmush/actions/workflows/build.yml/badge.svg)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.12-blue)
-![Version](https://img.shields.io/badge/version-3.5.1-brightgreen)
-![Tests](https://img.shields.io/badge/tests-554%20passed-brightgreen)
+![Version](https://img.shields.io/badge/version-3.6.0-brightgreen)
+![Tests](https://img.shields.io/badge/tests-598%20passed-brightgreen)
 
 It runs as the `mush` service of the Nova Games platform on nova-core3 and is served at **https://192.168.1.5:8443/mush/** (LAN only).
 
@@ -16,13 +16,17 @@ NPCs and the in-game guide are voiced by an AI narrator through the Nova Games r
 
 | | |
 |---|---|
-| Version | 3.5.1 (2026-11-19). See [CHANGELOG.md](CHANGELOG.md) |
+| Version | 3.6.0 (2026-11-19). See [CHANGELOG.md](CHANGELOG.md) |
 | Stack | Python 3.12, FastAPI, SQLAlchemy async (asyncpg / aiosqlite), uvicorn, plain JavaScript |
 | Where | nova-core3 container `novagames-mush`, behind Caddy at `/mush/`, deployed with `deploy/deploy.sh mush` from the NovaGames repo |
 | Data | Postgres 17 Games DB, schema `mush` (TLS verify-full, DML-only runtime role). Play history in the platform `play` schema |
 | AI | Relay only (`mush.npc` template). Staff and per-player on/off, real relay health, bounded retries, output validation, scripted fallback. See [AI options](#ai-options) |
 | Watch | `+watch` or the **Watch** button: NPCs wander, emote and talk to each other while you watch read-only. See [Spectator mode](#spectator-mode-watch) |
-| Tests | 588 passed (`python -m pytest -q`). CI on every push |
+| Tests | 598 passed (`python -m pytest -q`). CI on every push |
+
+### New in 3.6.0
+
+- Login, `@password` and registration rate limits survive a restart: counted attempts go to the new `rate_limit_hits` table (revision `0003_rate_limit_hits`) and are reloaded at startup. Command, API, WebSocket and AI limits stay in memory on purpose.
 
 ### New in 3.5.1
 
@@ -167,7 +171,7 @@ flowchart TB
 ```
 
 - Persistent world state is only in schema `mush`. NPC conversation history (last 10 exchanges, validated text only) is a column on `npcs`.
-- The relay queue, rate limiter, socket caps, the staff AI switch and AI counters are in process memory and reset on restart.
+- The relay queue, socket caps, the staff AI switch, AI counters and the per-second rate limits (commands, API, WebSocket, AI) are in process memory and reset on restart. Login and registration limits survive a restart (`rate_limit_hits` table).
 - The per-player AI opt-out is the `NO_AI` flag on the player object, so it persists.
 
 ### A player command over the WebSocket
@@ -480,7 +484,7 @@ flowchart TD
 - **Session tokens.** `base64url(payload).base64url(HMAC-SHA256(SECRET_KEY, payload))`, where the payload holds the player id, the expiry (`ACCESS_TOKEN_EXPIRE_MINUTES`, default 12 h) and a nonce. Standard library only. Without `SECRET_KEY` the process uses a random ephemeral key, which is fine for development but means sessions reset on restart.
 - **Transport.** A browser gets cookie `mush_session` (HttpOnly, SameSite=Strict, `Secure` when `COOKIE_SECURE=true`, `Path=COOKIE_PATH`, which is `/mush/` in the image). Tools can send `Authorization: Bearer <token>`. The WebSocket authenticates with the token in its first frame.
 - **CSRF.** Cookie-authenticated POSTs (login, logout, register, admin approve and link) must carry a browser `Origin` that is in `ALLOWED_ORIGINS` or, when that list is empty, matches the `Host` the request arrived on. The WebSocket handshake applies the same rule.
-- **Login.** REST and WebSocket logins share one code path. Usernames are exact-match (case-insensitive). The checks are: rate limits per IP and per account, a single generic error for a wrong user or password, PENDING accounts refused with 403, and banned accounts refused. A successful login resets the per-account counter.
+- **Login.** REST and WebSocket logins share one code path. Usernames are exact-match (case-insensitive). The checks are: rate limits per IP and per account, a single generic error for a wrong user or password, PENDING accounts refused with 403, and banned accounts refused. A successful login resets the per-account counter. Login (per IP, per account), `@password` and registration counters are also written to the `rate_limit_hits` table and reloaded at startup, so a restart or crash does not reset them; if the write fails, the in-memory limit still applies and a warning is logged.
 - **Registration** (`REGISTRATION_MODE`):
 
   | Mode | Behaviour |
@@ -848,7 +852,7 @@ python -m pytest              # or: python -m pytest -q
 Current result: **554 passed** (verified 2026-11-12 with a NovaGames checkout next to this repo; without one, the platform schema sync test is skipped).
 
 - Configuration: `pytest.ini` sets `asyncio_mode = auto`, `testpaths = tests`, and a 60 s per-test timeout (thread method).
-- `tests/conftest.py` sets `BCRYPT_ROUNDS=4`, `REGISTRATION_MODE=open`, a throwaway SQLite file DB under `tests/.data`, and test-only `SECRET_KEY` and `GOD_PASSWORD` values. Most tests use an in-memory SQLite engine. The process-wide rate limiter is cleared around every test.
+- `tests/conftest.py` sets `BCRYPT_ROUNDS=4`, `REGISTRATION_MODE=open`, a throwaway SQLite file DB under `tests/.data`, and test-only `SECRET_KEY` and `GOD_PASSWORD` values. Most tests use an in-memory SQLite engine. The process-wide rate limiter, and its persisted hits in the app test DB, are cleared around every test.
 - Postgres integration tests (`tests/test_hardening.py`, via `tests/pg_cluster.py`) use `PG_TEST_URL` / `PG_TEST_MIGRATE_URL` if set. Otherwise they `initdb` a private cluster in a temp directory on a free loopback port, with SCRAM auth and the production role layout (`mush_owner` owns schema `mush`, `mush` gets DML only), and tear it down afterwards. `tests/test_play_log.py` also creates the platform `play` schema in that private cluster (from `../NovaGames/deploy/db/play.sql` when that checkout exists, else the vendored copy `tests/play_schema.sql`, which a test keeps in sync), so its Postgres tests need the private cluster rather than `PG_TEST_URL`. That needs `initdb`, `pg_ctl` and `psql` on `PATH` (Homebrew `postgresql@17` on the Mac; CI installs Ubuntu's `postgresql` and adds its `bin` directory to `PATH`). Without them those tests are skipped. They never touch any other Postgres.
 - Coverage areas: models, objects, commands, locks, channels, mail and pages, quests and economy, moderation, REST API, security (validation, rate limits, credential scanning), auth bypass, hardening (Origin, caps, frame limits, relay signing and fallback, softcode budget, Postgres TLS URL handling, real-Postgres seed and roles), the AI layer (`tests/test_ai_parity.py`: Security, Performance, Retry, Unit, Integration, Functional, Frame for the toggles, relay health, retries, output validation and scripted fallback), play history (`tests/test_play_log.py`: Security, Performance, Retry, Unit, Integration on real Postgres with row-level security, Functional over the WebSocket, Frame), spectator mode (`tests/test_spectate.py`: Security, Performance, Retry, Unit, Integration, Functional, UI-state; covers read-only enforcement, AI toggles and `NO_AI`, turn and relay caps, auto-stop, and the `AI vs AI` spectator session with `stopped` / `taken_over`), and integration.
 - CI (`.github/workflows/build.yml`) runs on pushes and PRs to main: Python 3.12, Postgres binaries, `python -m pytest -q`, then `pip-audit -r requirements.txt`.
@@ -865,7 +869,7 @@ These come from the current code and are tracked for follow-up:
 - The softcode interpreter has no in-game entry point yet (there is no `think` or attribute trigger).
 - `IDLE_TIMEOUT_MINUTES`, `STARTING_ROOM` and the `channel` rate limit are defined but not applied.
 - The staff AI switch (`@ai/off`, `POST /api/admin/ai`) is held in memory and resets to on at restart. Use `AI_BACKEND=none` for a permanent off.
-- Rate limiter, socket caps, room cache and relay queue are in process memory. Run a single uvicorn worker (as the image does).
+- Socket caps, room cache, relay queue and the rate limiter's decisions are in process memory (login/registration hits are also in the DB, but only reloaded at startup). Run a single uvicorn worker (as the image does).
 
 ---
 

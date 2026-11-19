@@ -14,13 +14,16 @@ import time
 
 class RateLimiter:
     """
-    In-memory sliding-window rate limiter.
+    Sliding-window rate limiter, decided in process memory.
 
-    Previously this persisted to a JSON file on every call (a synchronous disk
-    write per command - a DoS amplifier). State is now process memory only:
-    a restart clears it, which is acceptable because the proxy and the
-    per-IP connection caps bound abuse anyway. Memory is bounded by MAX_KEYS
-    (oldest-touched keys are evicted first).
+    Login and registration limits (PERSISTENT) also survive a restart: their
+    counted hits are written to the `rate_limit_hits` table through the async
+    check()/areset() API and reloaded by load() at startup, so restarting (or
+    crashing) the server does not hand a password guesser a fresh budget. One
+    small insert per attempt is cheap next to the bcrypt verify every attempt
+    already costs. All other limits (commands, API, WebSocket, AI) stay
+    memory-only: they are per-second abuse brakes where a write per call would
+    be the amplifier. Memory is bounded by MAX_KEYS (oldest keys evicted).
     """
 
     MAX_KEYS = 50000
@@ -100,6 +103,70 @@ class RateLimiter:
     def clear(self):
         """Drop all state (tests / admin)."""
         self.requests.clear()
+
+    # ---------------- persistence (login / registration only) ----------------
+    # Memory stays the decision point (and the fallback if the DB is down);
+    # every counted hit of a PERSISTENT type is also written to
+    # rate_limit_hits, and startup reloads the hits still inside their window.
+
+    PERSISTENT = ("login_ip", "login_user", "register_ip")
+    PRUNE_EVERY = 200
+
+    async def check(self, db, key: str, limit_type: str) -> bool:
+        """is_allowed() plus a durable record of the hit for PERSISTENT types."""
+        allowed = self.is_allowed(key, limit_type)
+        if allowed and limit_type in self.PERSISTENT:
+            await self._persist(db, "add", f"{limit_type}:{key}")
+        return allowed
+
+    async def areset(self, db, key: str, limit_type: str):
+        """reset() in memory and in the database."""
+        self.reset(key, limit_type)
+        if limit_type in self.PERSISTENT:
+            await self._persist(db, "reset", f"{limit_type}:{key}")
+
+    def _max_window(self) -> float:
+        return max(self.limits[t][1] for t in self.PERSISTENT)
+
+    async def _persist(self, db, op: str, bucket: str):
+        """Write on a short session of its own, so the caller's transaction is untouched."""
+        from sqlalchemy import delete
+        from sqlalchemy.ext.asyncio import AsyncSession
+        from backend.models import RateLimitHit
+        try:
+            async with AsyncSession(db.bind, expire_on_commit=False) as s:
+                if op == "add":
+                    s.add(RateLimitHit(bucket=bucket[:160], hit_at=time.time()))
+                    self._writes = getattr(self, "_writes", 0) + 1
+                    if self._writes % self.PRUNE_EVERY == 0:
+                        await s.execute(delete(RateLimitHit).where(
+                            RateLimitHit.hit_at < time.time() - self._max_window()))
+                else:
+                    await s.execute(delete(RateLimitHit).where(RateLimitHit.bucket == bucket[:160]))
+                await s.commit()
+        except Exception as exc:  # never fail a login because the counter could not be stored
+            logging.getLogger("webpennmush.security").warning(
+                "rate limit hit not persisted (%s); memory limit still applies", type(exc).__name__)
+
+    async def load(self, session_factory) -> int:
+        """Startup: prune expired rows and reload live hits into memory. Returns hits loaded."""
+        from sqlalchemy import delete, select
+        from backend.models import RateLimitHit
+        wall, mono = time.time(), self._now()
+        loaded = 0
+        async with session_factory() as s:
+            await s.execute(delete(RateLimitHit).where(RateLimitHit.hit_at < wall - self._max_window()))
+            rows = (await s.execute(select(RateLimitHit.bucket, RateLimitHit.hit_at)
+                                    .order_by(RateLimitHit.hit_at))).all()
+            await s.commit()
+        for bucket, hit_at in rows:
+            limit_type = bucket.split(":", 1)[0]
+            if limit_type not in self.PERSISTENT or hit_at <= wall - self.limits[limit_type][1]:
+                continue
+            q = self._window(bucket, self.limits[limit_type][1], mono)
+            q.append(mono - max(0.0, wall - hit_at))  # wall-clock age -> monotonic timestamp
+            loaded += 1
+        return loaded
 
 
 class InputValidator:

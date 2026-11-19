@@ -997,7 +997,7 @@ The guide uses the Nova Games narrator relay; you get scripted answers when it's
         if "=" not in args:
             return "Usage: @password <old password>=<new password>"
         old, new = args.split("=", 1)
-        if not rate_limiter.is_allowed(str(player.id), "login_user"):
+        if not await rate_limiter.check(self.session, f"#{player.id}", "login_user"):
             return "Too many attempts. Wait a few minutes."
         if not await pwd_context.averify(old, player.password_hash or ""):
             return "Incorrect password."

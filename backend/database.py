@@ -659,6 +659,8 @@ Related: help @create, help talk
 
     await sync_sequences(ddl_engine)
     await load_world_rng(SeedSession)
+    from backend.security import rate_limiter
+    log.info("rate limits: %d login/registration hits reloaded", await rate_limiter.load(SeedSession))
 
 
 async def load_world_rng(session_factory, world=None):

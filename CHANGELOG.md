@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.6.0] - 2026-11-19
+
+### Persistent login and registration limits
+
+#### Added
+- `rate_limit_hits` table (revision `0003_rate_limit_hits`): one row per counted attempt for `login_ip`, `login_user` and `register_ip`, wall-clock timestamped
+- `RateLimiter.check(db, ...)` / `areset(db, ...)` write through on a short session of their own; `RateLimiter.load()` runs at startup, prunes expired rows and reloads live hits with their real age
+
+#### Changed
+- Login (REST and WebSocket), `@password` (key `#<id>` so it cannot collide with a username) and registration use the persistent API. Memory still decides, so a DB error only logs a warning
+- Command, API, WebSocket and AI limits stay memory-only by design
+
+#### Tests
+- `tests/test_rate_limit_persistence.py`: login per IP, per account and registration limits survive a simulated restart, a successful-login reset is persisted, expired hits are pruned and not reloaded, reloaded hits keep their age, other limits write nothing, DB failure falls back to memory, end-to-end registration limit across two app starts, and the DML-only Postgres role can write and reload hits
+
 ## [3.5.1] - 2026-11-19
 
 ### Logging

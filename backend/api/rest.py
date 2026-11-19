@@ -138,7 +138,7 @@ async def register_player(player_data: PlayerCreate, request: Request, db: Async
     if mode == "closed":
         raise HTTPException(status_code=403, detail="Registration is closed. Ask an admin for an account.")
     ip = auth.client_ip(request)
-    if not rate_limiter.is_allowed(ip, "register_ip"):
+    if not await rate_limiter.check(db, ip, "register_ip"):
         raise HTTPException(status_code=429, detail="Too many registrations from your address. Try later.")
     if mode == "invite":
         code = player_data.invite_code or ""

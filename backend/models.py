@@ -5,7 +5,7 @@ Author: Jordan Koch (GitHub: kochj23)
 Core object system modeled after PennMUSH's unified object structure.
 Everything is an Object with different types: ROOM, THING, EXIT, PLAYER.
 """
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Boolean, Enum
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Boolean, Enum, Float, Index
 from sqlalchemy.orm import relationship, declarative_base
 from datetime import datetime
 import enum
@@ -401,3 +401,14 @@ class WorldSetting(Base):
 
     key = Column(String(64), primary_key=True)
     value = Column(Text, nullable=False)
+
+
+class RateLimitHit(Base):
+    """One counted login/registration attempt, so those limits survive a restart."""
+    __tablename__ = "rate_limit_hits"
+
+    id = Column(Integer, primary_key=True)
+    bucket = Column(String(160), nullable=False)  # "<limit_type>:<key>"
+    hit_at = Column(Float, nullable=False)  # unix time (wall clock: must survive a restart)
+    __table_args__ = (Index("ix_rate_limit_hits_bucket_hit_at", "bucket", "hit_at"),
+                      Index("ix_rate_limit_hits_hit_at", "hit_at"))

@@ -53,8 +53,20 @@ def _reset_global_rate_limiter():
     """The app uses a process-wide limiter; isolate tests from each other."""
     from backend.security import rate_limiter as global_limiter
     global_limiter.clear()
+    _clear_persisted_hits()
     yield
     global_limiter.clear()
+    _clear_persisted_hits()
+
+
+def _clear_persisted_hits():
+    """Login/registration hits are also stored in the app DB and reloaded at startup."""
+    import sqlite3
+    try:
+        with sqlite3.connect(_APP_DB) as c:
+            c.execute("DELETE FROM rate_limit_hits")
+    except sqlite3.OperationalError:  # DB or table not created yet
+        pass
 
 
 @pytest_asyncio.fixture

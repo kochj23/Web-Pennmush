@@ -59,6 +59,7 @@ The Web-Pennmush server runs as a container named `novagames-mush` behind a Cadd
 
 ## Security Controls
 
+- Login (20 per IP and 10 per account per 10 min, `@password` included) and registration (3 per IP per hour) limits are persisted in `rate_limit_hits` and reloaded at startup, so a restart or crash does not reset them. Rows older than an hour are pruned at startup and every 200 writes. Other limits stay in memory: a DB write per command would turn the limiter into an amplifier. To unlock an address by hand: `DELETE FROM mush.rate_limit_hits WHERE bucket = 'login_ip:<ip>'` and restart.
 - Security events are logged with the `logging` module, never `print`: `webpennmush.security` (`failed_login`, `rate_limited`, `suspicious_input`) and `webpennmush.audit` (`admin_action`). Each record has a `security <k=v ...>` message and a `security_event` dict for structured shipping. Passwords and tokens are redacted before logging.
 - `/docs`, `/redoc`, and `/openapi.json` are disabled; `DEBUG` is off.
 - All `/api` routes require a session except:
