@@ -10,6 +10,7 @@ sqlalchemy==2.1.6
 asyncpg==0.32.0
 aiosqlite==0.22.1
 greenlet==3.5.6
+alembic==1.20.1
 
 # Auth / validation
 bcrypt==5.0.0

@@ -16,7 +16,7 @@ The Web-Pennmush server runs as a container named `novagames-mush` behind a Cadd
 
 - Dedicated PostgreSQL instance with database named `games` and schema `mush`.
 - Application uses `DATABASE_URL` (role `mush`, DML only).
-- Table creation and sequence sync at startup use `DATABASE_MIGRATE_URL` (role `mush_owner`).
+- Schema migrations (Alembic `upgrade head`), the world seed and sequence sync at startup use `DATABASE_MIGRATE_URL` (role `mush_owner`). See [Schema migrations](#schema-migrations).
 - TLS enabled with `sslmode=verify-full` and pinned CA.
 - SQLite is used only for local development and unit tests.
 
@@ -39,7 +39,7 @@ The Web-Pennmush server runs as a container named `novagames-mush` behind a Cadd
 | DEBUG                     | false            | Enable debug mode (must be off in production)                           |
 | SECRET_KEY                | required         | Session signing key; if empty a per-process random key is used and sessions reset on restart |
 | DATABASE_URL              | SQLite file (dev) | Postgres URL for the app role (production)                             |
-| DATABASE_MIGRATE_URL      | = DATABASE_URL   | Postgres URL for the schema-owner role (create_all, sequences)          |
+| DATABASE_MIGRATE_URL      | = DATABASE_URL   | Postgres URL for the schema-owner role (migrations, seed, sequences)    |
 | REGISTRATION_MODE         | approval         | One of: invite, approval, closed, open (open only for dev)              |
 | INVITE_CODE               | required if mode=invite | Required when registration mode is `invite`                          |
 | RELAY_SECRET_MUSH         | optional         | Enables NPC/guide lines through LLM relay; otherwise scripted           |
@@ -108,6 +108,50 @@ The Web-Pennmush server runs as a container named `novagames-mush` behind a Cadd
   - X-Frame-Options: DENY
   - nosniff
   - Referrer-Policy: no-referrer
+
+## Schema migrations
+
+The schema is managed by Alembic (`backend/migrations/`). Revision
+`0001_baseline` is a frozen copy of the schema that `create_all` built up to
+3.3.1. On every start the server, as `mush_owner`, runs in one transaction:
+
+1. If the `mush` schema has the game tables but no `alembic_version` table (a
+   database created before 3.4.0), it is **stamped** at `0001_baseline`. No
+   table is created, altered or dropped. Any difference from the baseline is
+   logged as a warning.
+2. `alembic upgrade head`: applies any newer revisions.
+3. World seed (only if `#0` is missing) and sequence sync.
+
+The first 3.4.0 start on production therefore only adds the `alembic_version`
+table. Later releases that ship a revision change the schema at that start.
+
+### Production upgrade path
+
+1. Read the CHANGELOG for the release; it names every new revision.
+2. **Back up the `mush` schema first** (as the owner role, from a host that can reach the Games DB):
+   ```bash
+   pg_dump --schema=mush --format=custom --file=mush-$(date +%Y%m%d-%H%M).dump "$DATABASE_MIGRATE_URL"
+   ```
+   Check the file is non-empty (`pg_restore --list mush-*.dump | head`) and keep it until the new version has run cleanly.
+3. Deploy the new image. The container runs the migrations at startup; a failed
+   migration rolls back its transaction and the container exits, so the old
+   schema stays intact.
+4. Check the log for `database schema stamped to head` or
+   `database schema upgraded to head`, and `SELECT version_num FROM mush.alembic_version`.
+5. Rollback: redeploy the previous image. If a revision changed the schema
+   incompatibly, restore the dump first:
+   `pg_restore --clean --if-exists --schema=mush -d "$DATABASE_MIGRATE_URL" mush-<stamp>.dump`.
+
+### Writing a new revision (development)
+
+```bash
+DATABASE_URL=sqlite+aiosqlite:///./dev.db alembic upgrade head
+DATABASE_URL=sqlite+aiosqlite:///./dev.db alembic revision --autogenerate -m "describe change"
+```
+
+Review the generated file (`render_as_batch` is on for SQLite), give it a
+readable `--rev-id`, and add a test in `tests/test_migrations.py`. Never edit a
+revision that has shipped.
 
 ## Admin Tasks
 

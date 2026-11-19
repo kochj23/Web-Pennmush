@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.4.0] - 2026-11-19
+
+### Schema migrations (Alembic)
+
+#### Added
+- Alembic (`alembic==1.20.1`), `backend/migrations/`, and `alembic.ini` for the CLI. The database URL comes only from the environment (`DATABASE_MIGRATE_URL` / `DATABASE_URL`)
+- Revision `0001_baseline`: the schema `create_all` produced in 3.3.1, frozen
+
+#### Changed
+- Startup no longer calls `create_all`. As the owner role it stamps a pre-Alembic database (game tables present, no `alembic_version`) at `0001_baseline` without altering it, then runs `upgrade head`, all in one transaction, before the seed and sequence sync
+- Deployment docs: production upgrade path with a `pg_dump` backup step and rollback
+
+#### Tests
+- `tests/test_migrations.py`: on SQLite and on the private Postgres cluster, a fresh database (baseline equals the models, seed runs, restart is a no-op), an existing `create_all` database stamped with no schema or data change, and a sample second revision that upgrades after stamping
+
 ## [3.3.1] - 2026-11-12
 
 ### Watch games are recorded (watch contract v2)

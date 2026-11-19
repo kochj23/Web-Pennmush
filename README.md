@@ -5,7 +5,7 @@ A web-based MUSH server inspired by [PennMUSH](https://github.com/pennmush/pennm
 ![Build](https://github.com/kochj23/Web-Pennmush/actions/workflows/build.yml/badge.svg)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.12-blue)
-![Version](https://img.shields.io/badge/version-3.3.1-brightgreen)
+![Version](https://img.shields.io/badge/version-3.4.0-brightgreen)
 ![Tests](https://img.shields.io/badge/tests-554%20passed-brightgreen)
 
 It runs as the `mush` service of the Nova Games platform on nova-core3 and is served at **https://192.168.1.5:8443/mush/** (LAN only).
@@ -16,13 +16,17 @@ NPCs and the in-game guide are voiced by an AI narrator through the Nova Games r
 
 | | |
 |---|---|
-| Version | 3.3.1 (2026-11-12). See [CHANGELOG.md](CHANGELOG.md) |
+| Version | 3.4.0 (2026-11-19). See [CHANGELOG.md](CHANGELOG.md) |
 | Stack | Python 3.12, FastAPI, SQLAlchemy async (asyncpg / aiosqlite), uvicorn, plain JavaScript |
 | Where | nova-core3 container `novagames-mush`, behind Caddy at `/mush/`, deployed with `deploy/deploy.sh mush` from the NovaGames repo |
 | Data | Postgres 17 Games DB, schema `mush` (TLS verify-full, DML-only runtime role). Play history in the platform `play` schema |
 | AI | Relay only (`mush.npc` template). Staff and per-player on/off, real relay health, bounded retries, output validation, scripted fallback. See [AI options](#ai-options) |
 | Watch | `+watch` or the **Watch** button: NPCs wander, emote and talk to each other while you watch read-only. See [Spectator mode](#spectator-mode-watch) |
-| Tests | 562 passed (`python -m pytest -q`). CI on every push |
+| Tests | 571 passed (`python -m pytest -q`). CI on every push |
+
+### New in 3.4.0
+
+- Real schema migrations with Alembic. The first revision is the 3.3.1 schema exactly; an existing database is stamped at it on first start, never altered. Startup runs `upgrade head`. Production upgrade path, including a `pg_dump` backup step: [Schema migrations](docs/DEPLOYMENT_AND_SECURITY.md#schema-migrations).
 
 ### New in 3.3.1
 
@@ -687,7 +691,7 @@ DATABASE_MIGRATE_URL=postgresql://mush_owner:<owner-pw>@games-pg:5432/games?sslm
 How the app uses them (`backend/database.py`):
 
 - `postgresql://` URLs are rewritten to `postgresql+asyncpg://`. `sslmode` and `sslrootcert` are removed from the query string and turned into an `ssl.SSLContext` (TLS 1.2 minimum; `verify-full` checks the hostname, `verify-ca` does not, `require` and `disable` are passed through).
-- At startup the app waits for `SELECT 1` with exponential backoff (`DB_CONNECT_RETRIES`, 0.5 s doubling up to 10 s). It then runs `create_all`, the world seed and `setval` sequence sync as `mush_owner`. That is the migration mechanism. The DDL engine is disposed afterwards, and all runtime traffic uses `mush`.
+- At startup the app waits for `SELECT 1` with exponential backoff (`DB_CONNECT_RETRIES`, 0.5 s doubling up to 10 s). It then runs Alembic `upgrade head` (stamping a pre-3.4.0 database at `0001_baseline` first, without altering it), the world seed and `setval` sequence sync as `mush_owner`. See [Schema migrations](docs/DEPLOYMENT_AND_SECURITY.md#schema-migrations) for the production upgrade path and backup step. The DDL engine is disposed afterwards, and all runtime traffic uses `mush`.
 - Pool: `DB_POOL_SIZE` 5, `DB_MAX_OVERFLOW` 5, `DB_POOL_TIMEOUT_S` 10, pre-ping, 30-minute recycle. Server settings: `statement_timeout` (`DB_STATEMENT_TIMEOUT_MS` 5000), `idle_in_transaction_session_timeout` 30 s, `application_name=web-pennmush`, and `search_path=DB_SCHEMA`.
 - Instead of `DATABASE_URL`, the URL can be assembled from `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER` and `DB_PASSWORD` or `DB_PASSWORD_FILE`. With neither, the app falls back to SQLite `./webpennmush.db` (development only).
 
@@ -866,7 +870,8 @@ Web-Pennmush/
     auth.py              HMAC session tokens, login, client IP, admin and pending checks
     passwords.py         bcrypt wrapper (72-byte limit, dummy verify)
     security.py          RateLimiter, InputValidator, SecurityLogger
-    database.py          Engine (Postgres TLS / SQLite), retry, create_all, seed, sequence sync
+    database.py          Engine (Postgres TLS / SQLite), retry, Alembic upgrade/stamp, seed, sequence sync
+    migrations/          Alembic env and revisions (0001_baseline = the 3.3.1 schema)
     models.py            SQLAlchemy models (objects, attributes, locks, mail, channels, ...)
     relay.py             Relay HMAC sign/verify, RelayJobQueue, /relay router
     play_log.py          Play-history logger (platform schema `play`, Postgres only, fire-and-forget)
@@ -893,6 +898,7 @@ Web-Pennmush/
   Dockerfile             Production image (novagames/mush)
   requirements.txt       Pinned runtime dependencies
   requirements-dev.txt   Test and audit dependencies
+  alembic.ini            Alembic CLI config (URL comes from the environment)
   pytest.ini
   .github/workflows/build.yml
   SECURITY.md, SOFTCODE_REFERENCE.md, CHANGELOG.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md, LICENSE

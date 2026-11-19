@@ -21,7 +21,7 @@ class Settings(BaseSettings):
 
     # Application
     APP_NAME: str = "Web-Pennmush"
-    APP_VERSION: str = "3.3.1"
+    APP_VERSION: str = "3.4.0"
     DEBUG: bool = False
 
     # Server (container overrides HOST to 0.0.0.0; local default stays on loopback)
@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     # DB_* parts (password from DB_PASSWORD or DB_PASSWORD_FILE). SQLite is only
     # used for local dev and the unit-test fixture.
     DATABASE_URL: str = ""
-    # Owner/DDL role used only for create_all + sequence sync at startup.
+    # Owner/DDL role used only for Alembic migrations, seed + sequence sync at startup.
     DATABASE_MIGRATE_URL: str = ""
     DB_HOST: str = ""
     DB_PORT: int = 5432

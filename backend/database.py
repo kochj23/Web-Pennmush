@@ -177,11 +177,56 @@ async def init_db():
             await ddl_engine.dispose()
 
 
-async def _init_schema_and_seed(ddl_engine):
-    """create_all + world seed + sequence sync, run as the schema owner role."""
+MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
+BASELINE_REVISION = "0001_baseline"
+
+
+def alembic_config(extra_version_locations=()):
+    """Programmatic Alembic config (no alembic.ini needed in the image)."""
+    from alembic.config import Config
+    cfg = Config()
+    cfg.set_main_option("script_location", str(MIGRATIONS_DIR))
+    cfg.set_main_option("path_separator", "os")
+    locations = [str(MIGRATIONS_DIR / "versions"), *(str(p) for p in extra_version_locations)]
+    cfg.set_main_option("version_locations", os.pathsep.join(locations))
+    return cfg
+
+
+def _migrate_sync(conn, cfg) -> str:
+    """Stamp a pre-Alembic database at the baseline, then upgrade to head."""
+    from alembic import command
+    from sqlalchemy import inspect
+
+    cfg.attributes["connection"] = conn
+    tables = set(inspect(conn).get_table_names())
+    action = "upgraded"
+    if "alembic_version" not in tables and "objects" in tables:
+        # Created by the old create_all startup: record it as the baseline
+        # without touching a single table.
+        from alembic.autogenerate import compare_metadata
+        from alembic.migration import MigrationContext
+        drift = compare_metadata(MigrationContext.configure(conn), Base.metadata)
+        if drift:
+            log.warning("existing schema differs from baseline in %d place(s); stamping anyway: %s",
+                        len(drift), drift[:5])
+        command.stamp(cfg, BASELINE_REVISION)
+        action = "stamped"
+    command.upgrade(cfg, "head")
+    return action
+
+
+async def run_migrations(ddl_engine, extra_version_locations=()) -> str:
+    """Run `alembic upgrade head` on ddl_engine (owner role) in one transaction."""
+    cfg = alembic_config(extra_version_locations)
     async with ddl_engine.begin() as conn:
-        # Create all tables (idempotent; this is the project's migration mechanism)
-        await conn.run_sync(Base.metadata.create_all)
+        action = await conn.run_sync(_migrate_sync, cfg)
+    log.info("database schema %s to head", action)
+    return action
+
+
+async def _init_schema_and_seed(ddl_engine):
+    """Alembic upgrade + world seed + sequence sync, run as the schema owner role."""
+    await run_migrations(ddl_engine)
     SeedSession = async_sessionmaker(ddl_engine, class_=AsyncSession, expire_on_commit=False)
 
     # Create initial game world if it doesn't exist
